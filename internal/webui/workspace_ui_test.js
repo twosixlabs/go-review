@@ -5,15 +5,17 @@ const path=require('node:path');
 const vm=require('node:vm');
 const {JSDOM}=require('jsdom');
 
-async function workspace() {
+async function workspace(options={}) {
   const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
   const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090/'});
+  if(options.tutorialSeen)dom.window.localStorage.setItem('go-review-tutorial:v1','seen');
   const loc={fileID:'f',line:3,column:1,endLine:3,endColumn:26};
   const snapshot={root:'/repo',module:'example/app',sourceSHA256:'sha',documentationRoot:'/repo',
     packages:[{path:'example/app',name:'app',fileIDs:['f'],imports:[],doc:'Application package.'}],
     symbols:[{id:'run',name:'Run',kind:'function',package:'example/app',location:loc,signature:'func Run()',cyclomatic:1}],
     files:[{id:'f',path:'app.go',package:'example/app',source:'package app\n\nfunc Run() { return }\n'}],
-    calls:[],documents:[{id:'readme',path:'README.md',text:'# Project\nDocumentation body.'}],
+    calls:[],systemFlow:{components:[],operations:[],exchanges:[],limitations:[]},
+    documents:[{id:'readme',path:'README.md',text:'# Project\nDocumentation body.'}],
     httpEndpoints:[],warnings:[],limitations:[],commands:[],operationSources:{callables:[],calls:[]},
     controlFlows:[{symbolID:'run',entry:'start',nodes:[
       {id:'start',kind:'entry',label:'Run',reachable:true,location:loc,callIDs:[]},
@@ -120,6 +122,24 @@ test('documentation and review diagnostics use readable content space without lo
   }finally{dom.window.close();}
 });
 
+test('Application documentation uses the same wide reader as other views',async()=>{
+  const {dom,doc,run}=await workspace({tutorialSeen:true});
+  try {
+    run("go({kind:'application'})");
+    for(const action of ['navigation','overview']) {
+      if(action==='navigation')doc.querySelector('#docs').click();
+      else [...doc.querySelectorAll('#application-overview button')].find(b=>b.textContent==='Project purpose & full documentation').click();
+      assert.equal(run('mode.kind'),'application');
+      assert.ok(doc.body.classList.contains('workspace-reader'));
+      assert.equal(dom.window.getComputedStyle(doc.querySelector('main')).gridTemplateColumns,
+        'minmax(280px,.8fr) minmax(480px,1.2fr)','Application must not override the reader with a 360px inspector');
+      assert.match(doc.querySelector('#detail').textContent,/Documentation body/);
+      [...doc.querySelectorAll('#detail button')].find(b=>b.textContent==='Close details').click();
+      assert.equal(doc.body.classList.contains('workspace-reader'),false);
+    }
+  }finally{dom.window.close();}
+});
+
 test('package maps start at readable node scale and keep an explicit full-map fit action',async()=>{
   const {dom,doc,run}=await workspace();
   try {
@@ -199,5 +219,86 @@ test('evidence collection does not enable function controls without a selected f
     for(const id of ['logical-flow','function-flow','data-flow','call-map'])
       assert.equal(doc.getElementById(id).disabled,true,id+' must still require a selected function');
     assert.equal(doc.querySelector('#review-map').disabled,false);
+  }finally{dom.window.close();}
+});
+
+test('first-use tutorial can be cancelled and remembers dismissal without changing review state',async()=>{
+  const {dom,doc,run,executions}=await workspace();
+  try {
+    const tour=doc.querySelector('#tutorial-dialog');
+    assert.ok(tour,'first use must offer an introductory walkthrough');
+    assert.equal(tour.hidden,false);
+    const before=run('JSON.stringify(mode)');
+    doc.querySelector('#tutorial-next').click();
+    assert.match(doc.querySelector('#tutorial-progress').textContent,/2 of/);
+    doc.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Tab',bubbles:true}));
+    assert.equal(doc.activeElement.id,'tutorial-skip','Tab must remain inside the tutorial');
+    doc.querySelector('#tutorial-back').click();
+    assert.match(doc.querySelector('#tutorial-progress').textContent,/1 of/);
+    doc.querySelector('#tutorial-skip').click();
+    assert.equal(tour.hidden,true);
+    assert.equal(dom.window.localStorage.getItem('go-review-tutorial:v1'),'seen');
+    run('render()');
+    assert.equal(tour.hidden,true,'renders must not restart a dismissed tour');
+    assert.equal(run('JSON.stringify(mode)'),before);
+    assert.equal(executions(),0);
+  }finally{dom.window.close();}
+});
+
+test('Tutorial replays for the current view and completion is remembered',async()=>{
+  const {dom,doc,run,executions}=await workspace({tutorialSeen:true});
+  try {
+    assert.equal(doc.querySelector('#tutorial-dialog').hidden,true);
+    for(const kind of ['packages','logical','symbol','review','signals','system-flow','dataflow']) {
+      run(`go({kind:'${kind}',id:'run'})`);
+      await new Promise(resolve=>setImmediate(resolve));
+      const before=run('JSON.stringify(mode)');
+      const requests=executions();
+      doc.querySelector('#workspace-tutorial').click();
+      assert.equal(doc.querySelector('#tutorial-dialog').hidden,false);
+      assert.ok(doc.querySelector('#tutorial-title').textContent);
+      doc.querySelector('#tutorial-next').click();
+      const titles={packages:'Explore packages and functions',logical:'Follow local implementations',
+        symbol:'Inspect this function',review:'Compare measured evidence',signals:'Inspect findings, not just scores',
+        'system-flow':'Explore structure and exchanges',dataflow:'Trace definitions and uses'};
+      assert.equal(doc.querySelector('#tutorial-title').textContent,titles[kind]);
+      doc.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+      assert.equal(doc.querySelector('#tutorial-dialog').hidden,true);
+      assert.equal(run('JSON.stringify(mode)'),before);
+      assert.equal(executions(),requests,'tutorial must not request analysis or evidence collection');
+      assert.equal(doc.activeElement.id,'workspace-tutorial');
+    }
+    doc.querySelector('#workspace-tutorial').click();
+    for(let i=0;i<10&&!doc.querySelector('#tutorial-dialog').hidden;i++)doc.querySelector('#tutorial-next').click();
+    assert.equal(doc.querySelector('#tutorial-dialog').hidden,true,'Finish must close the walkthrough');
+    assert.equal(dom.window.localStorage.getItem('go-review-tutorial:v1'),'seen');
+    await new Promise(resolve=>setImmediate(resolve));
+  }finally{dom.window.close();}
+});
+
+test('tutorial teaches different evidence-reading and drill-down workflows for each view',async()=>{
+  const {dom,doc,run}=await workspace({tutorialSeen:true});
+  try {
+    const cases=[
+      ["{kind:'application'}",/entry point/i,/startup/i],
+      ["{kind:'package',id:'example/app'}",/function/i,/imports|call/i],
+      ["{kind:'logical',id:'run'}",/reference/i,/same.package/i],
+      ["{kind:'symbol',id:'run'}",/branch/i,/statement/i],
+      ["{kind:'dataflow',id:'run'}",/definition/i,/consumer/i],
+      ["{kind:'review'}",/horizontal/i,/marker/i],
+      ["{kind:'signals'}",/finding/i,/source/i],
+      ["{kind:'signals',section:'hygiene'}",/skipped/i,/check/i],
+      ["{kind:'system-flow',level:'components'}",/contract/i,/operation/i]
+    ];
+    for(const [state,meaning,action] of cases) {
+      run(`go(${state})`);await new Promise(resolve=>setImmediate(resolve));
+      doc.querySelector('#workspace-tutorial').click();
+      const lessons=run("tutorialSteps.slice(1).map(s=>s[1]).join('\\n')");
+      assert.match(lessons,meaning,state+' must explain its notation');
+      assert.match(lessons,action,state+' must explain an investigation action');
+      assert.ok(run('tutorialSteps.length')>=7,'view-specific instruction must go beyond the generic overview');
+      doc.querySelector('#tutorial-skip').click();
+    }
+    await new Promise(resolve=>setImmediate(resolve));
   }finally{dom.window.close();}
 });

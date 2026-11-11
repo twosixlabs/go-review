@@ -503,6 +503,15 @@ for live UI/MCP parity checks.
   to pan, Shift-scroll or pinch to zoom, drag the background to pan, and drag
   nodes to rearrange. Alt-arrow moves the focused node; Reset layout restores
   its source-derived arrangement.
+- **Tutorial** provides a short, contextual walkthrough of the open view without
+  changing the selection or executing analysis or tests. It starts on first use
+  in this browser. Skip, Escape, or Finish dismisses it and remembers that choice;
+  the toolbar button replays it anytime. Back/Next and keyboard focus stay within
+  the walkthrough while it is open.
+  Each view has its own lessons: what question it answers, how to read its
+  cards/arrows or axes, which tools reveal more detail, how to inspect source,
+  and which perspective to use next. Measurement lessons distinguish unknown
+  evidence, coverage, complexity, supported-rule findings, and check outcomes.
 - In the optional function walkthrough, expand a
   local call at its occurrence; its body leads back to that caller's normal
   continuation. Repeated calls remain distinct, and package boundaries do not

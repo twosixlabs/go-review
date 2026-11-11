@@ -14,7 +14,7 @@ function documentationContext() {
   return {};
 }
 function openDocumentation(document,fragment='') {
-  go({...mode,documentID:document.id,documentFragment:fragment,documentOpen:true,
+  go({...mode,documentID:document.id,documentFragment:fragment,documentOpen:true,inspectorOpen:true,
     documentContext:documentationTools.contextKey(mode)});
 }
 function relatedDocumentation(parent) {

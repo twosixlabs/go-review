@@ -43,7 +43,7 @@ button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,s
 .visual-workspace .graph-hint{font-size:11px;padding:5px 12px;flex:none;line-height:1.4}
 .visual-workspace.review-diagram>main{display:grid;grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .visual-workspace.review-diagram.review-inspector-open>main{grid-template-areas:"canvas inspector";grid-template-columns:minmax(0,1fr) 360px}
-.visual-workspace.workspace-reader>main{grid-template-areas:"canvas inspector";grid-template-columns:minmax(280px,.8fr) minmax(480px,1.2fr)}
+.visual-workspace.workspace-reader.review-inspector-open>main{grid-template-areas:"canvas inspector";grid-template-columns:minmax(280px,.8fr) minmax(480px,1.2fr)}
 .visual-workspace.workspace-reader #list{display:none}
 .visual-workspace.workspace-reader #detail{padding:24px 32px}
 .workspace-reader #detail>.repository-document{max-width:80ch;margin-inline:auto}
@@ -55,13 +55,13 @@ button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,s
 @media(max-width:1200px){
   .visual-workspace:not(.review-diagram)>main{grid-template-columns:210px minmax(0,1fr) 320px}
   .review-sections{gap:6px 14px}
-  .visual-workspace.workspace-reader>main{grid-template-columns:minmax(220px,.65fr) minmax(380px,1.35fr)}
+  .visual-workspace.workspace-reader.review-inspector-open>main{grid-template-columns:minmax(220px,.65fr) minmax(380px,1.35fr)}
 }
 @media(max-width:900px){
   .visual-workspace:not(.review-diagram)>main{grid-template-areas:"explorer canvas";grid-template-columns:210px minmax(0,1fr);position:relative}
   .visual-workspace.review-diagram.review-inspector-open>main{grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr);position:relative}
   .visual-workspace.review-inspector-open #detail{display:block;position:absolute;inset:0 0 0 auto;width:min(90vw,440px);max-height:none;z-index:5;box-shadow:-8px 0 20px #0008}
-  .visual-workspace.workspace-reader>main{grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr)}
+  .visual-workspace.workspace-reader.review-inspector-open>main{grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr)}
   .visual-workspace.workspace-reader #detail{width:100%;padding:20px;box-shadow:none}
 }
 @media(max-width:600px){
@@ -74,5 +74,5 @@ button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,s
   .workspace-bar input{max-width:none;min-width:140px}
   .review-sections{max-height:120px;overflow:auto}
   .section-label{min-width:52px}
-  .visual-workspace.workspace-reader>main{grid-template-areas:"canvas";grid-template-rows:minmax(0,1fr)}
+  .visual-workspace.workspace-reader.review-inspector-open>main{grid-template-areas:"canvas";grid-template-rows:minmax(0,1fr)}
 }

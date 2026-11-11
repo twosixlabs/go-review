@@ -1,0 +1,12 @@
+.tutorial-layer{position:fixed;inset:0;z-index:1000;background:#0009}
+.tutorial-layer[hidden],.tutorial-dialog[hidden],.tutorial-spotlight[hidden]{display:none}
+.tutorial-spotlight{position:fixed;border:2px solid #9ed5ff;border-radius:6px;pointer-events:none;box-shadow:0 0 0 3px #10172280}
+.tutorial-dialog{position:fixed;width:min(440px,calc(100vw - 24px));box-sizing:border-box;max-height:calc(100dvh - 24px);overflow:auto;background:#182b40;color:#e5efff;border:1px solid #9ed5ff;border-radius:10px;padding:20px;box-shadow:0 12px 40px #0009}
+.tutorial-dialog h2{font-size:20px;line-height:1.35;margin:8px 0 12px}
+.tutorial-dialog p{font-size:14px;line-height:1.6;margin:0 0 14px}
+.tutorial-dialog #tutorial-progress{font-size:12px;margin:0}
+.tutorial-dialog .error:empty{display:none}
+.tutorial-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tutorial-actions button{min-height:36px;font-size:13px}
+#tutorial-skip{margin-right:auto;background:transparent}
+#tutorial-next{background:#365c7c;border-color:#95d0fc}
