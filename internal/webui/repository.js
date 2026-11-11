@@ -86,6 +86,7 @@ function showReviewReport(next) {
   }
 }
 
+let reviewStatusLoaded=false,reviewLastError='';
 async function pollReview() {
   if(reviewPollPending)return;
   reviewPollPending=true;
@@ -100,7 +101,7 @@ async function pollReview() {
       const reconnecting=repositoryReviewBusy;
       if(reconnecting)stopReviewMonitor();
       if(state.run&&(reconnecting||repositoryRun?.directory!==state.run.directory||repositoryRun?.status!==state.run.status)) {
-        if(reconnecting) {
+        if(reconnecting||reviewStatusLoaded) {
           const snapshot=await fetch('/api/snapshot');
           if(snapshot.ok) {
             showReviewReport(await snapshot.json());
@@ -109,10 +110,15 @@ async function pollReview() {
         }
         showRepositoryRun(state.run);
         $('directory').value=state.run.root;
-        reviewRunStatus(state.run);
+        if(!state.error)reviewRunStatus(state.run);
         if(reconnecting&&!report)repositoryRunDetail();
-      } else if(reconnecting)status('Review stopped without a completed report. Check server diagnostics.',true);
+      } else if(reconnecting&&!state.error)status('Review stopped without a completed report. Check server diagnostics.',true);
+      if(!state.run&&repositoryRun)showRepositoryRun(null);
+      if(state.error&&(reconnecting||state.error!==reviewLastError))
+        status('Repository review failed: '+state.error+'. Displayed results were not refreshed.',true);
+      reviewLastError=state.error||'';
     }
+    reviewStatusLoaded=true;
   } catch(error) {
     reviewProgressError=error.message;
     if(repositoryReviewBusy)renderReviewProgress();
@@ -140,8 +146,16 @@ function showRepositoryRun(run) {
 }
 
 function reviewRunStatus(run) {
-  const failed=run.modules.filter(m=>m.error).length;
-  status(`Review ${run.status} · ${run.modules.length} module${run.modules.length===1?'':'s'}${failed?' · '+failed+' unavailable':''} · retained: ${run.directory}`,run.status!=='completed');
+  const unavailable=run.modules.filter(m=>m.error).length;
+  const failed=(run.steps||[]).filter(s=>s.status==='fail'||s.status==='error').length;
+  const skipped=(run.steps||[]).filter(s=>s.status==='not-run').length;
+  const parts=[run.status==='analyzed'?'Static analysis complete':run.status==='canceled'?'Review canceled':'Review complete',
+    `${run.modules.length} module${run.modules.length===1?'':'s'}`];
+  if(failed)parts.push(`${failed} failed check${failed===1?'':'s'}`);
+  if(unavailable)parts.push(`${unavailable} module${unavailable===1?'':'s'} unavailable`);
+  if(skipped)parts.push(`${skipped} check${skipped===1?'':'s'} not run`);
+  if(failed||unavailable||skipped)parts.push('See Review results');
+  status(parts.join(' · '),failed>0||unavailable>0||run.status==='canceled');
 }
 
 function repositoryRunDetail() {
@@ -150,7 +164,7 @@ function repositoryRunDetail() {
   target.replaceChildren();
   el('h2','Repository review',target);
   el('p',repositoryRun.root,target);
-  el('p',`Status: ${repositoryRun.status}\nRetained: ${repositoryRun.directory}/review.json`,target);
+  if(repositoryRun.finishedAt)el('p','Completed: '+new Date(repositoryRun.finishedAt).toLocaleString(),target);
   scopeDetailContent(target,repositoryRun.scope,repositoryRun.exclusions);
   for(const module of repositoryRun.modules) {
     if(module.error)el('p',module.directory+': '+module.error,target,'error');

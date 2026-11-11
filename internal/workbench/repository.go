@@ -24,13 +24,14 @@ type runSummary struct {
 	Steps      []review.ReviewStep     `json:"steps"`
 	Scope      review.ReviewScope      `json:"scope"`
 	Exclusions []review.ScopeExclusion `json:"exclusions"`
+	FinishedAt time.Time               `json:"finishedAt"`
 }
 
 func summarizeRun(run *review.RepositoryReview) *runSummary {
 	if run == nil {
 		return nil
 	}
-	summary := &runSummary{Root: run.Root, Directory: run.Directory, Status: run.Status, Modules: []moduleSummary{}, Steps: run.Steps, Scope: run.Scope, Exclusions: run.Exclusions}
+	summary := &runSummary{Root: run.Root, Directory: run.Directory, Status: run.Status, Modules: []moduleSummary{}, Steps: run.Steps, Scope: run.Scope, Exclusions: run.Exclusions, FinishedAt: run.FinishedAt}
 	for _, m := range run.Modules {
 		item := moduleSummary{Directory: m.Directory, Error: m.Error}
 		if m.Report != nil {
@@ -65,7 +66,8 @@ func (s *Server) repositoryReview(w http.ResponseWriter, r *http.Request) {
 			Running  bool                  `json:"running"`
 			Progress review.ReviewProgress `json:"progress"`
 			Run      *runSummary           `json:"run"`
-		}{s.reviewRunning, s.progress, summarizeRun(s.review)}
+			Error    string                `json:"error,omitempty"`
+		}{s.reviewRunning, s.progress, summarizeRun(s.review), s.reviewError}
 		s.mu.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(state)
@@ -90,6 +92,7 @@ func (s *Server) repositoryReview(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	started := time.Now().UTC()
 	s.reviewRunning, s.progress = true, review.ReviewProgress{Phase: "Discovering Go modules", Root: request.Directory, StartedAt: started, PhaseStartedAt: started}
+	s.reviewError = ""
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -104,6 +107,9 @@ func (s *Server) repositoryReview(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	})
 	if err != nil {
+		s.mu.Lock()
+		s.reviewError = err.Error()
+		s.mu.Unlock()
 		failure(w, 422, err.Error())
 		return
 	}

@@ -23,6 +23,7 @@ type Server struct {
 	review        *review.RepositoryReview
 	progress      review.ReviewProgress
 	reviewRunning bool
+	reviewError   string
 	agent         intelligence.Config
 }
 
@@ -130,9 +131,15 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		failure(w, 422, err.Error())
 		return
 	}
+	run, err := review.SaveAnalysis(report)
+	if err != nil {
+		failure(w, 500, "replace review evidence: "+err.Error())
+		return
+	}
 	s.mu.Lock()
 	s.report = report
-	s.review = nil
+	s.review = run
+	s.reviewError = ""
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(report)

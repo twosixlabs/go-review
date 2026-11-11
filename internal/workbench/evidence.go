@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/russellbrasser/go-review/internal/review"
@@ -124,6 +126,20 @@ func (s *Server) unitTests(w http.ResponseWriter, r *http.Request) {
 		failure(w, 500, err.Error())
 		return
 	}
+	if report.UnitEvidence != nil {
+		var obsolete []review.Command
+		for _, run := range report.UnitEvidence.Runs {
+			obsolete = append(obsolete, run.Commands...)
+		}
+		report.Commands = slices.DeleteFunc(report.Commands, func(command review.Command) bool {
+			return slices.ContainsFunc(obsolete, func(old review.Command) bool {
+				return old.StartedAt.Equal(command.StartedAt) && old.Executable == command.Executable && slices.Equal(old.Args, command.Args)
+			})
+		})
+	}
+	report.Warnings = slices.DeleteFunc(report.Warnings, func(warning string) bool {
+		return strings.HasPrefix(warning, "Selected unit evidence:")
+	})
 	report.UnitEvidence = nil
 	cache, err := os.UserCacheDir()
 	if err != nil {
@@ -155,6 +171,17 @@ func (s *Server) unitTests(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		state = "attention"
 		report.Warnings = append(report.Warnings, "Selected unit evidence: "+err.Error())
+	}
+	if report.Assessment != nil {
+		for i := range report.Assessment.Checks {
+			check := &report.Assessment.Checks[i]
+			if check.ID == "tests" {
+				check.Status, check.Detail = "pass", "Selected unit-test evidence refreshed."
+				if err != nil {
+					check.Status, check.Detail = "fail", err.Error()
+				}
+			}
+		}
 	}
 	finished := time.Now().UTC()
 	report.Review = &review.ReviewReference{Root: report.Scope.Root, Directory: artifacts, Status: state, StartedAt: started, FinishedAt: finished, ModuleCount: 1}
@@ -210,8 +237,7 @@ func (s *Server) unitTests(w http.ResponseWriter, r *http.Request) {
 			retained.Status = "attention"
 		}
 	}
-	// References address the newly published manifest; raw evidence paths
-	// retain their original selection directories and source identities.
+	// All current modules are consolidated before superseded evidence is removed.
 	for i := range retained.Modules {
 		if module := &retained.Modules[i]; module.Report != nil {
 			module.Report.Review = &review.ReviewReference{Root: retained.Root, Directory: artifacts, Status: retained.Status,
@@ -228,10 +254,7 @@ func (s *Server) unitTests(w http.ResponseWriter, r *http.Request) {
 			report.Warnings = append(report.Warnings, "Unit selections were not saved: "+err.Error())
 		}
 	}
-	data, err = json.Marshal(retained)
-	if err == nil {
-		err = os.WriteFile(filepath.Join(artifacts, "review.json"), data, 0600)
-	}
+	err = review.SaveCurrentReview(&retained)
 	if err != nil {
 		failure(w, 500, "retain unit evidence: "+err.Error())
 		return

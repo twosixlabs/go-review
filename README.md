@@ -133,9 +133,13 @@ Review is opinionated; there is no per-check configuration:
 - Keep collecting after check failures. Failed/unreviewable modules, missing
   prerequisites, analysis limitations, and execution errors stay visible.
   Coverage and traces are withdrawn if source consistency checks fail.
-- Retain the complete run, sources, command diagnostics, coverage and optional standard trace
-  artifacts outside the checkout in the OS user cache under `go-review/runs`.
-  The workbench shows progress, module selection, and **Review run & diagnostics**.
+- Keep only the current result for each repository, with its sources, command
+  diagnostics, coverage and optional standard trace artifacts outside the checkout
+  in the OS user cache under `go-review/runs`. A completed replacement deletes
+  superseded review evidence, including old selected-test runs. Refreshing one
+  module carries forward only the other modules' still-current artifacts.
+  **Analyze only** replaces execution evidence with a fresh static snapshot.
+  The workbench shows progress, module selection, and **Review results**.
   Running reviews have a persistent progress panel with the current stage,
   module, elapsed/stage time, and time since server confirmation. Reopening a
   page reconnects to an active review, and already-open pages detect new runs.
@@ -145,9 +149,12 @@ Review is opinionated; there is no per-check configuration:
   and percentage, not estimated time remaining. Failed and explicitly skipped
   stages count as processed, not passed; diagnostics retain their outcomes.
   During discovery the stage total is unknown and the bar is indeterminate.
-  Completion or cancellation loads the retained result.
-  Reopen a retained run with `go-review open /path/to/run/review.json` without
-  executing it again.
+  Completion or cancellation loads the current result. The summary distinguishes
+  failed checks, unavailable modules, and checks not run; skipped checks do not
+  mark a review failed. **Review results** explains individual outcomes.
+  Reopen a current result with `go-review open /path/to/run/review.json` without
+  executing it again. Old run directories are not an archive and are removed
+  when replaced.
 
 ### Review scope
 
@@ -196,8 +203,8 @@ New selections replace previous aggregate coverage rather than attributing it
 to the new tests. Failed selections retain partial aggregate evidence and actual
 matched test outcomes; skipped or unmatched tests are not passing evidence.
 Counters shared by several tests do not identify which test contributed a hit.
-Failures and raw diagnostic artifacts remain visible. Reopening historical
-snapshots never reruns collection.
+Failures and raw diagnostic artifacts from the current result remain visible.
+Reopening it never reruns collection; previous snapshots are not kept.
 Use `sh scripts/test-scope.sh` for the focused policy/API/UI fixtures, or add
 `all` for frontend tests, the full Go race suite, vet and build.
 

@@ -2,7 +2,6 @@ package review
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -147,7 +146,7 @@ func ReviewRepository(ctx context.Context, dir, storage string, progress func(Re
 		run.Steps = append(run.Steps, s)
 		current.CompletedStages = len(run.Steps)
 		emit()
-		if s.Status != "pass" {
+		if s.Status == "fail" || s.Status == "error" {
 			run.Status = "attention"
 		}
 		return s
@@ -314,7 +313,7 @@ func ReviewRepository(ctx context.Context, dir, storage string, progress func(Re
 			}
 		})
 		for _, c := range r.Assessment.Checks {
-			if c.Status != "pass" {
+			if c.Status == "fail" || c.Status == "error" {
 				run.Status = "attention"
 			}
 		}
@@ -328,14 +327,7 @@ func ReviewRepository(ctx context.Context, dir, storage string, progress func(Re
 			m.Report.Review = &ReviewReference{Root: run.Root, Directory: out, Status: run.Status, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt, ModuleCount: len(run.Modules)}
 		}
 	}
-	data, err := json.Marshal(run)
-	if err != nil {
-		return run, fmt.Errorf("encode review: %w", err)
-	}
-	if err = os.WriteFile(filepath.Join(out, "review.json"), data, 0600); err != nil {
-		return run, fmt.Errorf("retain review: %w", err)
-	}
-	return run, nil
+	return run, SaveCurrentReview(run)
 }
 
 func applyReviewCheck(r *Report, step ReviewStep) {

@@ -7,7 +7,7 @@ function button(text,fn,parent){const n=el('button',text,parent);n.type='button'
 function svg(tag,attrs,parent){const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);if(parent)parent.append(n);return n;}
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error);}
 function executionStatus(){
-  if(report.review)return `Review ${report.review.status}. Execution diagnostics retained with this snapshot.`;
+  if(report.review)return report.review.status==='analyzed'?'Static analysis only. No target tests executed.':'See Review results for check outcomes.';
   if(report.unitEvidence)return 'Snapshot includes explicitly selected unit-test coverage.';
   if(report.commands?.some(c=>c.executable==='go'&&c.args[0]==='test'))return 'Snapshot includes explicitly requested test execution.';
   return 'No target tests executed.';

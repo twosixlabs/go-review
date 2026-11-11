@@ -32,6 +32,14 @@ func TestReviewEndpointRequiresExplicitExecutionAndKeepsExistingSnapshotOnError(
 	if s.current().Module != "original" {
 		t.Fatal("failed collection erased previous review")
 	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:8090/api/review", nil))
+	var state struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil || !strings.Contains(state.Error, "does-not-exist") {
+		t.Fatalf("reconnected pages cannot see why the latest attempt failed: %s %v", w.Body.String(), err)
+	}
 }
 
 func TestRetainedReviewModuleSelectionDoesNotExecuteAgain(t *testing.T) {

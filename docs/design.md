@@ -308,6 +308,16 @@ excluded explicitly if undesired; the application is not launched separately.
 Repository verification requires separate
 authorization. Browsing and reopening retained results never run collection.
 
+Evidence storage is latest-only per canonical repository root. Publishing a new
+review, selected-test refresh, or static analysis removes superseded run
+directories. A selected-test refresh first copies only artifacts referenced by
+the other current module snapshots into the replacement, so deleting the old run
+does not break current coverage or runtime evidence. Cleanup is restricted to
+owned, direct, non-symlink directories with matching repository manifests; errors
+are surfaced rather than claiming successful cleanup.
+Checks not run are disclosed separately from failed checks and do not produce an
+attention status. The UI shows actionable outcomes, not internal cache paths.
+
 Documentation is displayed verbatim and attributed. Automated documentation
 presence or reference checks do not prove semantic agreement with the code.
 Do not fabricate semantic links from document titles or use-case names.

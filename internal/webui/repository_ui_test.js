@@ -9,7 +9,7 @@ test('initial snapshot and review-status responses keep the module picker synchr
   const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
   for(const snapshotFirst of [false,true]) {
     const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090/'});
-    const snapshot={root:'/repo/server',module:'app',packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]};
+    const snapshot={root:'/repo/server',module:'app',review:{status:'attention'},packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]};
     const run={root:'/repo',directory:'/retained',status:'attention',modules:[
       {directory:'/repo/wasm',module:'wasm'},{directory:'/repo/server',module:'app'}],steps:[]};
     let release;
@@ -26,6 +26,8 @@ test('initial snapshot and review-status responses keep the module picker synchr
       await new Promise(resolve=>setImmediate(resolve));
       assert.equal(dom.window.document.querySelector('#review-modules').value,snapshot.root,
         'module picker disagrees with the loaded snapshot after reload');
+      assert.doesNotMatch(dom.window.document.querySelector('#status').textContent,/attention|retained/,
+        'late snapshot response must not restore the obsolete banner');
     }finally{dom.window.close();}
   }
 });
@@ -136,7 +138,7 @@ test('idle page detects a new review, survives status errors, and loads completi
     await tick();
     assert.equal(doc.querySelector('#review-progress').hidden,true);
     assert.equal(doc.querySelector('#review-repository').disabled,false);
-    assert.match(doc.querySelector('#status').textContent,/attention/);
+    assert.match(doc.querySelector('#status').textContent,/Review complete/);
     assert.ok(snapshotReads>=2,'completion from another tab must load the new snapshot');
     assert.equal(posts,0,'monitoring must never execute repository code');
     assert.equal(timers.size,1,'idle monitoring must detect subsequent reviews without accumulating timers');
@@ -144,7 +146,7 @@ test('idle page detects a new review, survives status errors, and loads completi
     doc.querySelector('#status').textContent='a later action failed';
     await tick();
     assert.equal(doc.querySelector('#status').textContent,'a later action failed','unchanged history must not overwrite more recent feedback');
-    assert.match(finishedStatus,/attention/);
+    assert.match(finishedStatus,/Review complete/);
     state={running:true,progress:{phase:'Source analysis'}};
     await dom.window.eval('pollReview()');
     assert.equal(bar.hasAttribute('value'),false,'unknown discovery totals must not imply measured progress');
@@ -186,13 +188,13 @@ test('Review repository is one explicit action with retained results and no auto
     release();
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(doc.querySelector('#directory').value,'/repo','review must retain repository scope rather than silently switch to its first module');
-    assert.match(doc.querySelector('#status').textContent,/attention/i);
+    assert.match(doc.querySelector('#status').textContent,/1 failed check.*1 module unavailable/i);
     assert.equal(doc.querySelector('#review-modules').options.length,2);
     assert.ok(doc.querySelector('#review-modules').options[1].disabled,'failed modules must remain visible');
     doc.querySelector('#review-results').click();
     assert.match(doc.querySelector('#detail').textContent,/assertion failed/);
     assert.match(doc.querySelector('#detail').textContent,/invalid go.mod/);
-    assert.match(doc.querySelector('#detail').textContent,/\/retained\/run/);
+    assert.doesNotMatch(doc.querySelector('#detail').textContent,/\/retained\/run/);
     assert.equal(requested.filter(r=>r.options?.method==='POST').length,1,'browsing diagnostics reran repository code');
     dom.window.fetch=async()=>({ok:false,json:async()=>({error:'retained module unavailable'})});
     doc.querySelector('#review-modules').dispatchEvent(new dom.window.Event('change'));
@@ -204,4 +206,26 @@ test('Review repository is one explicit action with retained results and no auto
     assert.match(doc.querySelector('#status').textContent,/retained module unavailable/,'explicit review rejection must retain its actual error');
     assert.equal(doc.querySelector('#review-progress').hidden,true,'explicit rejection must not leave the UI stuck running');
   } finally {dom.window.close();}
+});
+
+test('skipped checks are explained without an error banner or cache paths',async()=>{
+  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090/'});
+  const snapshot={root:'/repo',module:'app',packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]};
+  const run={root:'/repo',directory:'/old/cache/path',status:'attention',modules:[{directory:'/repo',module:'app'}],
+    steps:[{id:'tests',title:'Go tests',status:'not-run',detail:'A component-aware harness is not configured.'}]};
+  dom.window.fetch=async url=>({ok:true,json:async()=>url==='/api/review'?{running:false,run}:snapshot});
+  try {
+    for(const match of html.matchAll(/<script src="\/([^"]+)"><\/script>/g))
+      vm.runInContext(fs.readFileSync(path.join(__dirname,match[1]),'utf8'),dom.getInternalVMContext(),{filename:match[1]});
+    await new Promise(resolve=>setImmediate(resolve));
+    const doc=dom.window.document;
+    const status=doc.querySelector('#status');
+    assert.doesNotMatch(status.textContent,/attention|retained|\/old\/cache/);
+    assert.match(status.textContent,/1 check not run/);
+    assert.equal(status.classList.contains('error'),false,'skipping unsupported checks is not a failed review');
+    doc.querySelector('#review-results').click();
+    assert.match(doc.querySelector('#detail').textContent,/component-aware harness is not configured/);
+    assert.doesNotMatch(doc.querySelector('#detail').textContent,/\/old\/cache/);
+  }finally{dom.window.close();}
 });
