@@ -7,7 +7,7 @@ const {JSDOM}=require('jsdom');
 const {endpointFlow,activityOverview}=require('./endpoint-flow-tools.js');
 const {hierarchy,project}=require('./visual-review-tools.js');
 
-test('real Builder entry points open major control/data handoffs before function steps',
+test('real Builder service or Wasm entries expose major handoffs before function steps',
   {skip:!process.env.GO_REVIEW_ENDPOINT_SNAPSHOT&&!process.env.GO_REVIEW_ENDPOINT_URL},async t=>{
   const liveURL=process.env.GO_REVIEW_ENDPOINT_URL;
   const served=async resource=>{
@@ -31,6 +31,33 @@ test('real Builder entry points open major control/data handoffs before function
       vm.runInContext(script.source,dom.getInternalVMContext(),{filename:script.name});
     await new Promise(resolve=>setImmediate(resolve));
     const doc=dom.window.document;
+    if(report.entryPoints?.kind==='wasm') {
+      const {entryInventory}=require('./application-tools.js');
+      const entry=entryInventory(report).find(e=>e.entryKind==='wasm');
+      assert.ok(entry,'WIT export missing');
+      const raw=endpointFlow(report,entry,{reviewActivities:true});
+      const handlerCall=report.operationSources.calls.find(c=>c.targetPackage==='builder/internal/cosmonic/handler'&&c.targetName==='Handle');
+      assert.ok(handlerCall,'fixture does not contain the business-handler call');
+      const boundary=raw.nodes.find(n=>n.callID===handlerCall.callID);
+      assert.ok(boundary,'business handler was silently omitted');
+      assert.match(boundary.boundary,/not been analyzed/);
+      assert.ok(!boundary.symbolID,'external implementation must not acquire local review gauges');
+      assert.ok(raw.nodes.some(n=>n.kind==='Prepare information'),'input decoding disappeared');
+      const constructors=report.operationSources.calls.filter(c=>c.targetPackage==='go.bytecodealliance.org/pkg/wit/types'&&
+        !c.receiver&&['Ok','Err'].includes(c.targetName));
+      assert.ok(constructors.length);
+      assert.ok(constructors.every(c=>!raw.nodes.some(n=>n.callID===c.callID)),
+        'WIT result constructors still dominate the activity overview');
+      const entryRow=doc.querySelector('.endpoint-row');
+      assert.ok(entryRow);entryRow.click();
+      const card=[...doc.querySelectorAll('.review-node')].find(n=>n.querySelector('.activity-select')?.textContent.includes('Handler')&&
+        n.querySelector('.activity-select')?.textContent.includes('Handle')&&!n.querySelector('.activity-select')?.textContent.includes('HandleMessage'));
+      assert.ok(card,'business handler is absent from rendered flow');card.querySelector('.activity-select').click();
+      assert.match(doc.querySelector('#detail').textContent,/not been analyzed/);
+      assert.ok(doc.querySelector('#detail').textContent.includes('builder/internal/cosmonic/handler'));
+      t.diagnostic('WIT export, input decoding, external business-handler boundary and source-only quality scope verified.');
+      return;
+    }
     for(const [route,component] of [
       ['POST /api/missions/{missionID}/builds','Builder'],
       ['POST /api/executions','Runner'],

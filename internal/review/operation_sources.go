@@ -61,6 +61,7 @@ type OperationCall struct {
 	TargetKey     string                   `json:"targetKey,omitempty"`
 	TargetName    string                   `json:"targetName"`
 	TargetPackage string                   `json:"targetPackage,omitempty"`
+	TargetOrigin  string                   `json:"targetOrigin,omitempty"`
 	TargetStatus  string                   `json:"targetStatus"`
 	Reason        string                   `json:"reason,omitempty"`
 	Anchor        OperationAnchor          `json:"anchor"`
@@ -414,7 +415,7 @@ func (c *operationSourceCollector) collectCall(p *parsedPackage, owner string, c
 		ID: stableID("operation-call", fmt.Sprintf("%s:%s", owner, callID)), CallID: callID,
 		CallerKey: owner, TargetKey: targetKey, TargetName: targetName, TargetStatus: targetStatus,
 		Reason: reason, Anchor: c.anchor(loc), Receiver: receiver, Arguments: arguments, Results: results,
-		TargetPackage: targetPackage, ResultTypes: resultTypes,
+		TargetPackage: targetPackage, TargetOrigin: c.a.origins[targetPackage], ResultTypes: resultTypes,
 	})
 }
 

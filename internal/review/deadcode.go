@@ -18,6 +18,9 @@ import (
 // Program and generated test mains are roots; library APIs are not assumed live.
 // Reflection, plugins and other build tags remain outside this build's evidence.
 func reviewDeadcode(ctx context.Context, report *Report) (string, string, error) {
+	if report.EntryPoints != nil && report.EntryPoints.Kind == "wasm" {
+		return "not-run", "WIT exports, not Go main, are component entry points. WIT-rooted reachability analysis is unavailable; main-only RTA cannot classify component code as unreachable.", nil
+	}
 	out, err := os.MkdirTemp("", "go-review-scope-rta-")
 	if err != nil {
 		return "", "", err

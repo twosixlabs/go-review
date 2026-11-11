@@ -7,18 +7,70 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 type UnitTestSelection struct {
 	Package string   `json:"package"`
 	Tests   []string `json:"tests"`
+}
+
+// ErrWasmUnitHarness distinguishes an unsupported test target from a failed test.
+var ErrWasmUnitHarness = errors.New("selected packages depend on retained Wasm imports and require a component-aware unit-test harness, which is not configured; native Go test execution is unavailable for these selections")
+
+func unitTestSupportError(r *Report, selections []UnitTestSelection) error {
+	byPackage := map[string][]File{}
+	for _, files := range [][]File{r.Files, r.SupportingFiles} {
+		for _, file := range files {
+			byPackage[file.Package] = append(byPackage[file.Package], file)
+		}
+	}
+	for _, source := range r.TestSources {
+		byPackage[source.File.Package] = append(byPackage[source.File.Package], source.File)
+	}
+	var pending []string
+	for _, selection := range selections {
+		pending = append(pending, selection.Package, selection.Package+"_test")
+	}
+	seen := map[string]bool{}
+	for len(pending) > 0 {
+		pkg := pending[0]
+		pending = pending[1:]
+		if seen[pkg] {
+			continue
+		}
+		seen[pkg] = true
+		for _, file := range byPackage[pkg] {
+			tree, err := parser.ParseFile(token.NewFileSet(), file.Path, file.Source, parser.ParseComments|parser.AllErrors)
+			if err != nil {
+				return fmt.Errorf("inspect retained source for Wasm test imports %s: %w", file.Path, err)
+			}
+			for _, group := range tree.Comments {
+				for _, comment := range group.List {
+					fields := strings.Fields(comment.Text)
+					if len(fields) > 1 && fields[0] == "//go:wasmimport" {
+						return ErrWasmUnitHarness
+					}
+				}
+			}
+			for _, spec := range tree.Imports {
+				imported, err := strconv.Unquote(spec.Path.Value)
+				if err != nil {
+					return fmt.Errorf("inspect retained import in %s: %w", file.Path, err)
+				}
+				pending = append(pending, imported)
+			}
+		}
+	}
+	return nil
 }
 
 type UnitEvidenceOptions struct {
@@ -75,6 +127,9 @@ func CollectUnitEvidence(ctx context.Context, r *Report, opts UnitEvidenceOption
 		selections, err = validateUnitSelections(r, opts.Selections)
 	}
 	if err != nil {
+		return err
+	}
+	if err := unitTestSupportError(r, selections); err != nil {
 		return err
 	}
 	if err = verifyDataSources(ctx, r); err != nil {

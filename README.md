@@ -252,6 +252,18 @@ entries. Each entry opens the same progressively disclosed implementation flow.
 **Entry declaration & evidence** exposes the retained Go/WIT/configuration
 provenance, including full contract/configuration text without executing it.
 Generated ABI scaffolding remains excluded from review gauges.
+Wasm input-decoding helpers remain visible as preparation stages. WIT `Result`
+constructors are collapsed in the activity overview, but their complete return
+expressions remain available in function steps and source. External dependency
+handoffs remain explicit even for import paths without a domain name; their
+implementations do not acquire local quality or coverage measurements.
+
+The main-rooted unreachable-code check is **Not run** for Wasm components: it
+does not model WIT export roots. Selected packages that depend on retained
+`go:wasmimport` declarations also require a component-aware unit-test harness;
+this is **Not run**, not a failed component test. Host-compatible component
+logic without these dependencies can still use ordinary Go unit tests, even
+when other packages in the module use Wasm imports.
 
 Wasm discovery reads `componentize-go.toml` (`worlds`, `wit_paths`),
 `wasmcloud.toml` (`wit_world`, `wit_path`), and available wasmCloud

@@ -72,10 +72,19 @@
     function visibleExternal(call) {
       if(['builtin','conversion'].includes(call.kind))return false;
       const t=typed.get(call.id),pkg=t?.targetPackage||'',text=call.target||'';
+      if(endpoint.entryKind==='wasm'&&pkg==='go.bytecodealliance.org/pkg/wit/types'&&
+        !t.receiver&&['Ok','Err'].includes(t.targetName)&&
+        t.resultTypes?.some(type=>type.startsWith(pkg+'.Result['))) {
+        limitations.add('WIT result constructors are collapsed supporting detail; inspect function steps or source for the full return expressions.');
+        return false;
+      }
       if(call.kind==='indirect'||t?.targetStatus==='function-value')return true;
       if(/(?:encoding\/json\.(?:Decoder|Encoder)\).(?:Decode|Encode)|net\/http\.ResponseWriter\).(?:Write|WriteHeader)|net\/http\.(?:Error|Redirect)|database\/sql|os\.(?:WriteFile|ReadFile|Open|Create))/.test(text))return true;
       if(pkg.startsWith('encoding/json')&&['Decode','Encode'].includes(t?.targetName))return true;
-      return pkg!==''&&(pkg.includes('.')||pkg===report.module||pkg.startsWith(report.module+'/'));
+      if(t?.targetOrigin==='standard-library')return false;
+      // Older snapshots lack package-origin facts. Keep unknown dependencies
+      // visible rather than inferring the standard library from path spelling.
+      return pkg!=='';
     }
     function backgroundTarget(callee,callbacks) {
       const candidates=new Set();
@@ -93,10 +102,14 @@
       const component=target.symbol?ownerName(target.symbol):
         componentByID.get((exchanges.get(call.id)||[])[0]?.to)?.name||t?.targetPackage||'External boundary';
       const invocation=call.invocation||'unclassified';
+      const boundary=!target.symbol?'Implementation is outside the analyzed source; its behavior and quality have not been analyzed.'+
+        (t?.reason?' '+t.reason:'')+
+        (t?.targetPackage?' Package: '+t.targetPackage+'.':''):undefined;
+      if(boundary)limitations.add(boundary);
       return make(prefix,{keep:true,phase,kind:invocation==='goroutine'?'Launch work':
         invocation==='deferred'?'Schedule deferred work':'Component operation',
         label:component+'\n'+targetName,symbolID:target.symbol?.id,componentID:components.get(target.symbol?.id)?.id,
-        callID:call.id,location:call.location,invocation,resolution:target.resolution,
+        callID:call.id,location:call.location,invocation,resolution:target.resolution,boundary,
         information:contracts(call,target.symbol),exchanges:exchanges.get(call.id)||[],
         alternatives:target.symbol?[...ownAlternatives(target.symbol.id)]:[]});
     }
@@ -132,7 +145,8 @@
           const transport=same&&signature?.kind==='function'&&(signature.parameters||[]).some(p=>
             /(?:net\/http\.ResponseWriter|\*net\/http\.Request)/.test(p.value.type));
           const mapping=same&&depth===0&&signature?.kind==='function'&&(signature.results||[]).some(r=>
-            r.value.type.includes(owner?.package+'.'));
+            r.value.type.includes(owner?.package+'.')||
+            endpoint.entryKind==='wasm'&&r.value.type.includes('.')&&r.value.type!=='error');
           const recursive=callee&&ancestry.has(callee.id);
           const scheduled=['goroutine','deferred'].includes(call.invocation);
           const unknownInvocation=!['synchronous','goroutine','deferred'].includes(call.invocation);

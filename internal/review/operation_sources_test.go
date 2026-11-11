@@ -3,9 +3,50 @@ package review
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestOperationSourcePackageOriginDoesNotUseImportPathSpelling(t *testing.T) {
+	root := t.TempDir()
+	dependency := filepath.Join(root, "dependency")
+	module := filepath.Join(root, "component")
+	writeReviewFixture(t, dependency, "go.mod", "module builder\n\ngo 1.24\n")
+	writeReviewFixture(t, dependency, "handler/handler.go", "package handler\nfunc Handle() {}\n")
+	writeReviewFixture(t, module, "go.mod", "module component\n\ngo 1.24\nrequire builder v0.0.0\nreplace builder => ../dependency\n")
+	writeReviewFixture(t, module, "main.go", `package main
+import ("builder/handler"; "fmt")
+func main() { handler.Handle(); fmt.Println("done"); helper() }
+func helper() {}
+`)
+	r, err := Analyze(context.Background(), Options{Dir: module})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(r.OperationSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sources struct {
+		Calls []struct {
+			TargetName   string `json:"targetName"`
+			TargetOrigin string `json:"targetOrigin"`
+		} `json:"calls"`
+	}
+	if err := json.Unmarshal(data, &sources); err != nil {
+		t.Fatal(err)
+	}
+	origins := map[string]string{}
+	for _, call := range sources.Calls {
+		origins[call.TargetName] = call.TargetOrigin
+	}
+	for name, want := range map[string]string{"Handle": "dependency", "Println": "standard-library", "helper": "module"} {
+		if origins[name] != want {
+			t.Errorf("%s package origin=%q want %q", name, origins[name], want)
+		}
+	}
+}
 
 type operationSourceFixture struct {
 	Version     string                  `json:"version"`

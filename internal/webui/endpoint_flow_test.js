@@ -58,6 +58,63 @@ function fixture() {
   };
 }
 
+test('dependency handoffs survive dotless package paths and disclose their unreviewed implementation',()=>{
+  const {endpointFlow}=require('./endpoint-flow-tools.js');
+  for(const origin of ['dependency',undefined]) {
+    const r=fixture(),call=r.calls.find(c=>c.id==='invoke');
+    delete call.to;
+    call.target='func builder/handler.Handle()';
+    r.operationSources.calls=[{callID:'invoke',targetName:'Handle',targetPackage:'builder/handler',
+      targetStatus:'external',targetOrigin:origin,arguments:[],resultTypes:['error']}];
+    const scene=endpointFlow(r,r.httpEndpoints[0]);
+    const boundary=scene.nodes.find(n=>n.callID==='invoke');
+    assert.ok(boundary,'dotless dependencies must not disappear, including legacy snapshots');
+    assert.equal(boundary.symbolID,undefined,'never claim a local implementation was reviewed');
+    assert.match(boundary.boundary,/outside.*analy|not.*analy/i);
+    assert.ok(scene.limitations.some(text=>text.includes('builder/handler')));
+  }
+});
+
+test('known standard-library helpers remain collapsed without hiding dependency calls',()=>{
+  const {endpointFlow}=require('./endpoint-flow-tools.js'),r=fixture(),call=r.calls.find(c=>c.id==='invoke');
+  delete call.to;call.target='func fmt.Sprintf()';
+  r.operationSources.calls=[{callID:'invoke',targetName:'Sprintf',targetPackage:'fmt',targetStatus:'external',
+    targetOrigin:'standard-library',arguments:[]}];
+  assert.ok(!endpointFlow(r,r.httpEndpoints[0]).nodes.some(n=>n.callID==='invoke'));
+});
+
+test('Wasm result construction is supporting detail, not a component handoff',()=>{
+  const {endpointFlow}=require('./endpoint-flow-tools.js');
+  for(const name of ['Ok','Err']) {
+    const r=fixture(),call=r.calls.find(c=>c.id==='invoke');
+    delete call.to;
+    call.target='func go.bytecodealliance.org/pkg/wit/types.'+name+'()';
+    r.operationSources.calls=[{callID:'invoke',targetName:name,targetPackage:'go.bytecodealliance.org/pkg/wit/types',
+      targetStatus:'external',targetOrigin:'dependency',arguments:[],
+      resultTypes:['go.bytecodealliance.org/pkg/wit/types.Result[go.bytecodealliance.org/pkg/wit/types.Unit, string]']}];
+    const endpoint={...r.httpEndpoints[0],entryKind:'wasm'};
+    const scene=endpointFlow(r,endpoint);
+    assert.ok(!scene.nodes.some(n=>n.callID==='invoke'),'ABI result constructors must not dominate the overview');
+    assert.deepEqual(scene.alternatives.map(a=>a.id).sort(),['no','yes']);
+    assert.ok(scene.limitations.some(text=>/WIT result.*function.*source/i.test(text)));
+    assert.ok(r.calls.some(c=>c.id==='invoke'),'supporting call evidence must remain retained');
+    r.operationSources.calls[0].receiver={type:'go.bytecodealliance.org/pkg/wit/types.Result'};
+    r.operationSources.calls[0].resultTypes=['string'];
+    assert.ok(endpointFlow(r,endpoint).nodes.some(n=>n.callID==='invoke'),
+      'result accessors must not be mistaken for constructors');
+  }
+});
+
+test('Wasm input decoding remains visible when its record type belongs to a dependency',()=>{
+  const {endpointFlow}=require('./endpoint-flow-tools.js'),r=fixture();
+  r.operationSources.callables=[{key:'helper',symbolID:'helper',kind:'function',
+    results:[{value:{type:'builder/runtime.EventEnvelope'}},{value:{type:'error'}}]}];
+  const scene=endpointFlow(r,{...r.httpEndpoints[0],entryKind:'wasm'});
+  const preparation=scene.nodes.find(n=>n.symbolID==='helper');
+  assert.ok(preparation,'the input-decoding responsibility must not disappear');
+  assert.equal(preparation.kind,'Prepare information');
+});
+
 for(const kind of ['wasm','cli','library'])test(kind+' entry inventory opens the same implementation flow and retains declaration evidence',async()=>{
   const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),snapshot=fixture();
   snapshot.httpEndpoints=[];

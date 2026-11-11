@@ -32,6 +32,7 @@ type listedPackage struct {
 	GoFiles, CgoFiles, Imports    []string
 	TestGoFiles, XTestGoFiles     []string
 	DepOnly                       bool
+	Standard                      bool
 	Module                        *listedModule
 	Error                         *struct{ Err string }
 	DepsErrors                    []struct{ Err string }
@@ -53,6 +54,7 @@ type analyzer struct {
 	objects  map[types.Object]string
 	literals map[*ast.FuncLit]string
 	exports  map[string]string
+	origins  map[string]string
 	fallback types.Importer
 }
 
@@ -132,7 +134,7 @@ func Analyze(ctx context.Context, opts Options) (*Report, error) {
 	if listErr != nil {
 		r.Warnings = append(r.Warnings, "go list returned an error: "+listErr.Error())
 	}
-	a := &analyzer{report: r, fset: token.NewFileSet(), packages: map[string]*parsedPackage{}, fileIDs: map[string]string{}, objects: map[types.Object]string{}, literals: map[*ast.FuncLit]string{}, exports: map[string]string{}}
+	a := &analyzer{report: r, fset: token.NewFileSet(), packages: map[string]*parsedPackage{}, fileIDs: map[string]string{}, objects: map[types.Object]string{}, literals: map[*ast.FuncLit]string{}, exports: map[string]string{}, origins: map[string]string{}}
 	dec := json.NewDecoder(bytes.NewReader(listData))
 	for {
 		var p listedPackage
@@ -145,6 +147,14 @@ func Analyze(ctx context.Context, opts Options) (*Report, error) {
 		}
 		if p.Export != "" {
 			a.exports[p.ImportPath] = p.Export
+		}
+		switch {
+		case p.Standard:
+			a.origins[p.ImportPath] = "standard-library"
+		case p.Module != nil && p.Module.Path == r.Module:
+			a.origins[p.ImportPath] = "module"
+		case p.Module != nil:
+			a.origins[p.ImportPath] = "dependency"
 		}
 		if p.DepOnly {
 			continue

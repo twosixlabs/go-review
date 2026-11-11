@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -283,6 +284,10 @@ func ReviewRepository(ctx context.Context, dir, storage string, progress func(Re
 				start := len(r.Commands)
 				e := CollectUnitEvidence(ctx, r, UnitEvidenceOptions{Selections: selections, AllTests: allTests, ArtifactDir: moduleOut})
 				s.Commands = r.Commands[start:]
+				if errors.Is(e, ErrWasmUnitHarness) {
+					s.Status, s.Detail = "not-run", e.Error()
+					return
+				}
 				commandStep(s, e)
 				if s.Status == "pass" && r.Coverage == nil {
 					s.Status, s.Detail = "error", "Tests produced no usable coverage profile."

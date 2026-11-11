@@ -197,12 +197,51 @@ func TestSystemFlowWasmAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range report.EntryPoints.Entries {
-		args, err := json.Marshal(map[string]string{"entryID": entry.ID})
+		args, err := json.Marshal(map[string]any{"entryID": entry.ID, "limit": 100})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := snapshot.query.Query(context.Background(), "flow", args); err != nil {
+		flow, err := snapshot.query.Query(context.Background(), "flow", args)
+		if err != nil {
 			t.Fatalf("real Wasm entry flow: %v", err)
+		}
+		var projection struct {
+			Nodes []struct {
+				Title    string `json:"title"`
+				Boundary string `json:"boundary"`
+			} `json:"nodes"`
+			NodePage struct {
+				NextOffset *int `json:"nextOffset"`
+			} `json:"nodePage"`
+		}
+		if err := json.Unmarshal(flow, &projection); err != nil {
+			t.Fatal(err)
+		}
+		handoff := false
+		for {
+			for _, node := range projection.Nodes {
+				if strings.Contains(node.Title, "Handle") && strings.Contains(strings.ToLower(node.Title), "handler") && !strings.Contains(node.Title, "HandleMessage") {
+					handoff = node.Boundary != ""
+				}
+			}
+			if projection.NodePage.NextOffset == nil {
+				break
+			}
+			args, err = json.Marshal(map[string]any{"entryID": entry.ID, "limit": 100, "offset": *projection.NodePage.NextOffset})
+			if err != nil {
+				t.Fatal(err)
+			}
+			flow, err = snapshot.query.Query(context.Background(), "flow", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projection.NodePage.NextOffset = nil
+			if err := json.Unmarshal(flow, &projection); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !handoff {
+			t.Fatalf("Wasm flow hides the external Builder handler implementation: %s", flow)
 		}
 	}
 	retainAcceptanceSummary(t, "wasm-entry-review", &review.RepositoryReview{
