@@ -348,6 +348,38 @@ test('endpoint selection opens overall flow, stage evidence and optional functio
     assert.ok(doc.querySelector('#activity-overview [data-metric="complexity"]'));
     assert.ok(doc.querySelector('#activity-overview [data-metric="architecture"]'));
     assert.ok(doc.body.classList.contains('activity-review'),'review must allocate the viewport to the activity workspace');
+    const viewport=doc.querySelector('.review-viewport');
+    Object.defineProperties(viewport,{clientWidth:{value:1000},clientHeight:{value:700}});
+    const wheel=new dom.window.WheelEvent('wheel',{deltaX:20,deltaY:40,bubbles:true,cancelable:true});
+    viewport.dispatchEvent(wheel);
+    assert.equal(wheel.defaultPrevented,true,'Application graph must own wheel gestures like the SVG graphs');
+    assert.equal(vm.runInContext('mode.reviewScroll.left',dom.getInternalVMContext()),20);
+    assert.equal(vm.runInContext('mode.reviewScroll.top',dom.getInternalVMContext()),40);
+    for(const modifier of ['shiftKey','ctrlKey']) {
+      const before=vm.runInContext('mode.reviewZoom||1',dom.getInternalVMContext());
+      viewport.dispatchEvent(new dom.window.WheelEvent('wheel',{deltaY:-100,[modifier]:true,bubbles:true,cancelable:true}));
+      assert.ok(vm.runInContext('mode.reviewZoom',dom.getInternalVMContext())>before,modifier+' must zoom in');
+    }
+    const pointer=(target,type,x,y)=>{
+      const event=new dom.window.MouseEvent(type,{clientX:x,clientY:y,button:0,bubbles:true,cancelable:true});
+      Object.defineProperty(event,'pointerId',{value:1});target.dispatchEvent(event);
+    };
+    const left=vm.runInContext('mode.reviewScroll.left',dom.getInternalVMContext());
+    pointer(viewport,'pointerdown',100,100);pointer(viewport,'pointermove',140,120);pointer(viewport,'pointerup',140,120);
+    assert.equal(vm.runInContext('mode.reviewScroll.left',dom.getInternalVMContext()),left-40);
+    const face=doc.querySelector('.review-node-face'),card=face.closest('.review-node'),nodeID=card.dataset.nodeId;
+    pointer(face,'pointerdown',100,100);pointer(face,'pointermove',160,130);pointer(face,'pointerup',160,130);
+    assert.ok(vm.runInContext(`mode.reviewPositions[${JSON.stringify(nodeID)}].x`,dom.getInternalVMContext())>0,
+      'dragging a node must rearrange it instead of panning or activating it');
+    let activated=false;
+    face.addEventListener('click',()=>{activated=true;});
+    face.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));
+    assert.equal(activated,false,'drag release must not activate a node');
+    const position=vm.runInContext(`mode.reviewPositions[${JSON.stringify(nodeID)}].x`,dom.getInternalVMContext());
+    face.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'ArrowRight',altKey:true,bubbles:true,cancelable:true}));
+    assert.equal(vm.runInContext(`mode.reviewPositions[${JSON.stringify(nodeID)}].x`,dom.getInternalVMContext()),position+10);
+    vm.runInContext('render()',dom.getInternalVMContext());
+    assert.match(doc.querySelector(`[data-node-id="${nodeID}"]`).style.transform,/translate/,'node position must survive render');
     const setup=doc.querySelector('#workspace-setup');
     assert.ok(setup);setup.click();
     assert.ok(doc.body.classList.contains('review-setup-open'),'review controls must remain reachable');

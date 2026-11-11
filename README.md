@@ -480,13 +480,29 @@ for live UI/MCP parity checks.
   count once, coverage is weighted by statements, and unassessed members remain
   distinct. Select a flow node for exact membership and individual measurements.
   Hygiene is shown once in the snapshot summary, not as a local node measurement.
-- **Selected evidence** opens/closes the coordinated inspector. **Repository &
-  scope** reveals collection controls without leaving the diagram. **Tools**
-  exposes diagnostics, applied scope, structural views, documentation, and
-  lower-level exploration. **Inspect operation map** and **Inspect function
+- **Explore**, **Assess**, and **Evidence** group the review destinations in
+  persistent navigation. Structural views keep a compact explorer, a primary
+  diagram, and independently scrolling details in separate columns. Selecting a
+  package exposes its filterable functions; breadcrumbs return to its ancestors.
+  **Review map** is always available under **Assess** for repository-wide
+  comparison. Logical flow, data flow, and call relationships require a selected
+  function; control flow additionally requires its source graph. The selected
+  view is highlighted independently of whether other views are available.
+  Large package maps open at a
+  readable scale; **Fit all** explicitly fits the complete diagram.
+- **Details** opens/closes the coordinated inspector; **Close details** or Escape
+  dismisses it. Documentation and diagnostics use a wider reader without losing
+  code context. Back restores navigation context and explorer position.
+  **Repository & scope** reveals collection controls without leaving the
+  diagram. **View options** contains display settings and explicit test-evidence
+  collection/import actions. **Inspect operation map** and **Inspect function
   steps** remain explicit detail actions, not the default review experience.
   **Fit overview** considers both diagram width and height; scrolling and
   independent zoom remain available when a readable overview exceeds the viewport.
+  Application flow diagrams use the same gestures as the other graphs: scroll
+  to pan, Shift-scroll or pinch to zoom, drag the background to pan, and drag
+  nodes to rearrange. Alt-arrow moves the focused node; Reset layout restores
+  its source-derived arrangement.
 - In the optional function walkthrough, expand a
   local call at its occurrence; its body leads back to that caller's normal
   continuation. Repeated calls remain distinct, and package boundaries do not

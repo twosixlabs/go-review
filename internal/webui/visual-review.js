@@ -88,7 +88,7 @@ function visualFocus(node,tree) {
   go({...mode,detailLevel:undefined,flowSymbolID:node.symbolID,parentReview:{...mode},
     parentOverview:{entry:overview.entry,nodes:overview.nodes.map(n=>({id:n.id,title:n.title,symbolID:n.symbolID,phase:n.phase})),
       edges:overview.edges.map(e=>({from:e.from,to:e.to,kind:e.kind}))},
-    expandedActivities:[],selected:undefined,reviewScroll:undefined,reviewZoom:undefined,viewport:undefined});
+    expandedActivities:[],selected:undefined,reviewScroll:undefined,reviewZoom:undefined,reviewPositions:undefined,viewport:undefined});
 }
 
 function visualParentOverview(parent) {
@@ -149,12 +149,18 @@ function renderVisualReview(endpoint,raw) {
   for(const id of tree.roots) {
     const n=tree.byID.get(id),b=button(n.title,()=>{
       const target=scene.nodes.find(v=>v.id===id);visualSelect(endpoint,scene,target);
-      [...panel.querySelectorAll('.review-node')].find(card=>card.dataset.nodeId===id)?.scrollIntoView?.({block:'nearest',inline:'nearest'});
+      const card=[...panel.querySelectorAll('.review-node')].find(card=>card.dataset.nodeId===id);
+      if(card) {
+        const box=card.getBoundingClientRect(),area=viewport.getBoundingClientRect();
+        mode={...mode,reviewScroll:{left:(mode.reviewScroll?.left||0)+box.left-area.left-16,
+          top:(mode.reviewScroll?.top||0)+box.top-area.top-16}};
+        sizeStage();
+      }
     },orientation);
     b.className=n.phase==='async-work'?'orientation-async':'';
   }
   const viewport=el('div',undefined,panel,'review-viewport');
-  viewport.tabIndex=0;viewport.setAttribute('aria-label','Scrollable flow diagram');
+  viewport.tabIndex=0;viewport.setAttribute('aria-label','Interactive flow diagram');
   const stage=el('div',undefined,viewport,'review-stage');
   const board=el('div',undefined,stage,'review-board');
   const connections=svg('svg',{class:'review-edges','aria-label':'Possible control relationships'},board);
@@ -186,6 +192,8 @@ function renderVisualReview(endpoint,raw) {
   function drawNode(node,parent) {
     const group=el('article',undefined,parent,'review-node'+(node.expanded?' review-boundary':''));
     group.dataset.nodeId=node.id;group.dataset.symbolId=node.symbolID||'';
+    const position=mode.reviewPositions?.[node.id];
+    if(position)group.style.transform=`translate(${position.x}px,${position.y}px)`;
     const face=el('div',undefined,group,'review-node-face');faces.set(node.id,face);
     el('span',node.phase==='async-work'?'Asynchronous work':node.kind,face,'review-node-kind');
     const select=button(node.title,()=>visualSelect(endpoint,scene,node),face);
@@ -238,6 +246,7 @@ function renderVisualReview(endpoint,raw) {
   function sizeStage() {
     const zoom=mode.reviewZoom||1;
     stage.style.width=board.offsetWidth*zoom+'px';stage.style.height=board.offsetHeight*zoom+'px';
+    board.style.transform=`translate(${- (mode.reviewScroll?.left||0)}px,${- (mode.reviewScroll?.top||0)}px) scale(${zoom})`;
   }
   function drawConnections() {
     edgeLayer.replaceChildren();
@@ -290,16 +299,77 @@ function renderVisualReview(endpoint,raw) {
   drawConnections();
   const controls=el('div',undefined,context,'review-zoom');
   const setZoom=z=>{
-    mode={...mode,reviewZoom:Math.max(.35,Math.min(1.75,z))};
-    board.style.transform=`scale(${mode.reviewZoom})`;sizeStage();drawConnections();
+    const old=mode.reviewZoom||1,ratio=z/old;
+    mode={...mode,reviewZoom:z,reviewScroll:{
+      left:((mode.reviewScroll?.left||0)+viewport.clientWidth/2)*ratio-viewport.clientWidth/2,
+      top:((mode.reviewScroll?.top||0)+viewport.clientHeight/2)*ratio-viewport.clientHeight/2}};
+    sizeStage();
   };
-  button('−',()=>setZoom((mode.reviewZoom||1)/1.2),controls).setAttribute('aria-label','Zoom flow out');
-  button('+',()=>setZoom((mode.reviewZoom||1)*1.2),controls).setAttribute('aria-label','Zoom flow in');
-  button('Fit overview',()=>setZoom(Math.min((viewport.clientWidth-32)/(board.offsetWidth||980),
-    (viewport.clientHeight-32)/(board.offsetHeight||700))),controls);
+  button('−',()=>setZoom((mode.reviewZoom||1)*.8),controls).setAttribute('aria-label','Zoom out');
+  button('+',()=>setZoom((mode.reviewZoom||1)/.8),controls).setAttribute('aria-label','Zoom in');
+  button('Fit overview',()=>{
+    const zoom=mode.reviewZoom||1,base=board.getBoundingClientRect();
+    const boxes=[...faces.values()].map(face=>face.getBoundingClientRect());
+    const x=Math.min(0,...boxes.map(b=>(b.left-base.left)/zoom));
+    const y=Math.min(0,...boxes.map(b=>(b.top-base.top)/zoom));
+    const w=Math.max(board.offsetWidth||980,...boxes.map(b=>(b.right-base.left)/zoom))-x;
+    const h=Math.max(board.offsetHeight||700,...boxes.map(b=>(b.bottom-base.top)/zoom))-y;
+    const next=Math.min((viewport.clientWidth-32)/w,(viewport.clientHeight-32)/h);
+    mode={...mode,reviewZoom:next,reviewScroll:{left:x*next,top:y*next}};sizeStage();
+  },controls);
   button('100%',()=>setZoom(1),controls);
-  viewport.scrollTop=mode.reviewScroll?.top||0;viewport.scrollLeft=mode.reviewScroll?.left||0;
-  viewport.onscroll=()=>{mode={...mode,reviewScroll:{top:viewport.scrollTop,left:viewport.scrollLeft}};};
+  button('Reset layout',()=>{mode={...mode,reviewPositions:undefined};render();},controls);
+  el('span','Scroll to pan · Shift+scroll or pinch to zoom · drag background to pan · drag nodes to rearrange · Alt + arrows moves a focused node',context);
+  viewport.addEventListener('wheel',event=>{
+    event.preventDefault();
+    const zoom=mode.reviewZoom||1;
+    const next=GoReviewGraph.wheelViewport({x:(mode.reviewScroll?.left||0)/zoom,
+      y:(mode.reviewScroll?.top||0)/zoom,w:viewport.clientWidth/zoom,h:viewport.clientHeight/zoom},
+      event,{a:1/zoom,b:0,c:0,d:1/zoom},viewport.clientHeight);
+    if(event.shiftKey||event.ctrlKey)setZoom(viewport.clientWidth/next.w);
+    else {mode={...mode,reviewScroll:{left:next.x*zoom,top:next.y*zoom}};sizeStage();}
+  },{passive:false});
+  let moving=null,suppressClick=false;
+  const moveNode=(card,x,y)=>{
+    const id=card.dataset.nodeId;
+    mode={...mode,reviewPositions:{...mode.reviewPositions,[id]:{x,y}}};
+    card.style.transform=`translate(${x}px,${y}px)`;drawConnections();
+  };
+  viewport.addEventListener('pointerdown',event=>{
+    if(event.button!==0)return;
+    const face=event.target.closest('.review-node-face'),card=face?.closest('.review-node');
+    const position=mode.reviewPositions?.[card?.dataset.nodeId]||{x:0,y:0};
+    moving={pointer:event.pointerId,card,capture:event.target,x:event.clientX,y:event.clientY,position,
+      left:mode.reviewScroll?.left||0,top:mode.reviewScroll?.top||0,moved:false};
+    suppressClick=false;
+    moving.capture.setPointerCapture?.(event.pointerId);
+  });
+  viewport.addEventListener('pointermove',event=>{
+    if(!moving||event.pointerId!==moving.pointer)return;
+    const dx=event.clientX-moving.x,dy=event.clientY-moving.y;
+    if(!moving.moved&&Math.hypot(dx,dy)<4)return;
+    moving.moved=true;
+    if(moving.card)moveNode(moving.card,moving.position.x+dx/(mode.reviewZoom||1),moving.position.y+dy/(mode.reviewZoom||1));
+    else {mode={...mode,reviewScroll:{left:moving.left-dx,top:moving.top-dy}};sizeStage();}
+  });
+  const finish=event=>{
+    if(!moving||event.pointerId!==moving.pointer)return;
+    suppressClick=moving.moved;
+    const capture=moving.capture;moving=null;
+    if(capture.hasPointerCapture?.(event.pointerId))capture.releasePointerCapture(event.pointerId);
+  };
+  for(const type of ['pointerup','pointercancel','lostpointercapture'])viewport.addEventListener(type,finish);
+  viewport.addEventListener('click',event=>{
+    if(suppressClick){event.preventDefault();event.stopImmediatePropagation();suppressClick=false;}
+  },true);
+  viewport.addEventListener('keydown',event=>{
+    const card=event.target.closest('.review-node');
+    if(!event.altKey||!card||!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key))return;
+    event.preventDefault();event.stopPropagation();
+    const position=mode.reviewPositions?.[card.dataset.nodeId]||{x:0,y:0},step=event.shiftKey?40:10;
+    moveNode(card,position.x+(event.key==='ArrowRight'?step:event.key==='ArrowLeft'?-step:0),
+      position.y+(event.key==='ArrowDown'?step:event.key==='ArrowUp'?-step:0));
+  });
   visualSelect(endpoint,scene,scene.nodes.find(n=>n.id===mode.selected)||scene.nodes[0],false);
 }
 

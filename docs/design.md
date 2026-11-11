@@ -324,6 +324,28 @@ Do not fabricate semantic links from document titles or use-case names.
 
 ## Evidence collection
 
+### Review workspace interaction
+
+Application review remains the primary entry experience. Other review views use
+explicit explorer / canvas / inspector grid areas, never implicit grid placement.
+Explorer and inspector scroll independently; the canvas receives the remaining
+width. Narrow screens use a dismissible inspector overlay. Large package maps
+start at readable node scale, with a separate Fit all action for the overview.
+
+Persistent Explore, Assess and Evidence groups expose destinations; function
+views operate on the selected callable, with unavailable actions disabled and
+explained. Display preferences and code-execution controls remain secondary.
+Clickable ancestors and Back preserve review context. Documents and diagnostics
+use a wider reader, while close controls and Escape return space to the diagram.
+No navigation gesture implicitly executes target-project tests.
+
+This follows [NN/g progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/)
+without hiding primary navigation, [NN/g breadcrumb guidance](https://www.nngroup.com/articles/breadcrumbs/)
+for wayfinding, [Carbon empty-state guidance](https://carbondesignsystem.com/patterns/empty-states-pattern/)
+for explicit missing/unavailable states, and [WCAG target-size guidance](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html)
+for operable controls. Browser validation covers actual pane bounds, readable
+node size, source drill-down and return paths, not only DOM presence.
+
 Use the Go toolchain for module/package selection and standard coverage
 profiles. Use Go syntax and type information for symbol identity, direct calls,
 locations, and documentation. Compute clearly named complexity measures from

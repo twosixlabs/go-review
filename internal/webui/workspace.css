@@ -1,0 +1,78 @@
+.review-sections{gap:16px;padding:7px 12px;flex-wrap:wrap;background:#121d2b}
+.review-sections>div{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.section-label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#9badc5;margin-right:5px}
+.review-sections button{padding:6px 9px;font-size:12px;background:transparent;border-color:transparent;min-height:32px}
+.review-sections button:hover,.review-sections button[aria-current=page]{background:#263e58;border-color:#6b94b5}
+.workspace-bar button{min-height:32px}
+.workspace-bar input{flex:1;max-width:320px}
+.function-views{gap:6px;padding:6px 12px;min-height:42px;flex-wrap:wrap;background:#151f2d}
+.function-views button{padding:5px 9px;font-size:12px;min-height:30px}
+.function-views button[aria-pressed=true]{background:#365c7c;border-color:#95d0fc}
+#function-view-hint{font-size:12px;color:#a6b7cd;margin-right:auto}
+button:disabled{cursor:not-allowed}
+button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #9ed5ff;outline-offset:3px}
+.view-options{display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:8px 12px;font-size:12px}
+.view-options .manual-evidence[open]{flex-basis:100%}
+.visual-workspace>#advanced-tools[open]{max-height:160px;flex:none}
+.visual-workspace>.review-sections,.visual-workspace>.function-views,.visual-workspace>.workspace-bar,.visual-workspace>#status{flex:none}
+/* Explicit areas prevent the third pane from auto-wrapping under the explorer. */
+.visual-workspace:not(.review-diagram)>main{
+  display:grid;grid-template-areas:"explorer canvas inspector";
+  grid-template-columns:clamp(210px,17vw,290px) minmax(0,1fr) clamp(320px,26vw,450px);
+  grid-template-rows:minmax(0,1fr);height:auto;min-height:0;overflow:hidden;
+}
+.visual-workspace:not(.review-diagram):not(.review-inspector-open)>main{
+  grid-template-areas:"explorer canvas";grid-template-columns:clamp(210px,17vw,290px) minmax(0,1fr);
+}
+.visual-workspace #list{grid-area:explorer;min-height:0;min-width:0;padding:12px;overflow:auto;scrollbar-gutter:stable}
+.visual-workspace #canvas{grid-area:canvas;min-height:0;min-width:0;overflow:hidden}
+.visual-workspace #detail{grid-area:inspector;min-height:0;min-width:0;padding:18px;overflow:auto;scrollbar-gutter:stable}
+.visual-workspace #list button{font-size:12px;padding:8px;line-height:1.45;margin:0 0 4px;min-height:34px}
+.visual-workspace #list button[aria-current=true]{background:#304d70;border-color:#95d0fc}
+.explorer-heading{font-size:13px;margin:0 0 12px;color:#dce5f2}
+.visual-workspace #detail h2{font-size:18px;line-height:1.4;margin-bottom:12px}
+.visual-workspace #detail p{line-height:1.55}
+.visual-workspace #detail pre{font-size:12px;line-height:1.65}
+.visual-workspace #breadcrumb{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:38px;font-weight:400}
+#breadcrumb button{background:transparent;border-color:transparent;color:#a9d8ff;padding:3px 5px;font:inherit;min-height:26px}
+#breadcrumb button:hover{background:#263e58;border-color:#6b94b5}
+.breadcrumb-separator{color:#7d91ab}
+#breadcrumb [aria-current=page]{font-weight:600;color:#e5efff}
+.visual-workspace #canvas>.tools{padding:4px 12px 8px;flex-wrap:wrap}
+.visual-workspace #legend{flex:1;min-width:180px;line-height:1.4}
+.visual-workspace .graph-hint{font-size:11px;padding:5px 12px;flex:none;line-height:1.4}
+.visual-workspace.review-diagram>main{display:grid;grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.visual-workspace.review-diagram.review-inspector-open>main{grid-template-areas:"canvas inspector";grid-template-columns:minmax(0,1fr) 360px}
+.visual-workspace.workspace-reader>main{grid-template-areas:"canvas inspector";grid-template-columns:minmax(280px,.8fr) minmax(480px,1.2fr)}
+.visual-workspace.workspace-reader #list{display:none}
+.visual-workspace.workspace-reader #detail{padding:24px 32px}
+.workspace-reader #detail>.repository-document{max-width:80ch;margin-inline:auto}
+.inspector-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #33425a}
+.inspector-actions span{font-size:11px;color:#a6b7cd;text-transform:uppercase;letter-spacing:.05em}
+.inspector-actions button{font-size:12px;padding:4px 8px;min-height:28px}
+.visual-workspace.review-setup-open>#open{flex-wrap:wrap}
+.visual-workspace.review-setup-open>#review-scope{max-height:35vh;overflow:auto;flex:none}
+@media(max-width:1200px){
+  .visual-workspace:not(.review-diagram)>main{grid-template-columns:210px minmax(0,1fr) 320px}
+  .review-sections{gap:6px 14px}
+  .visual-workspace.workspace-reader>main{grid-template-columns:minmax(220px,.65fr) minmax(380px,1.35fr)}
+}
+@media(max-width:900px){
+  .visual-workspace:not(.review-diagram)>main{grid-template-areas:"explorer canvas";grid-template-columns:210px minmax(0,1fr);position:relative}
+  .visual-workspace.review-diagram.review-inspector-open>main{grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr);position:relative}
+  .visual-workspace.review-inspector-open #detail{display:block;position:absolute;inset:0 0 0 auto;width:min(90vw,440px);max-height:none;z-index:5;box-shadow:-8px 0 20px #0008}
+  .visual-workspace.workspace-reader>main{grid-template-areas:"canvas";grid-template-columns:minmax(0,1fr)}
+  .visual-workspace.workspace-reader #detail{width:100%;padding:20px;box-shadow:none}
+}
+@media(max-width:600px){
+  .visual-workspace:not(.review-diagram)>main,.visual-workspace:not(.review-diagram):not(.review-inspector-open)>main{
+    grid-template-areas:"explorer" "canvas";grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(90px,22%) minmax(0,1fr);
+  }
+  .visual-workspace #list{display:block;max-height:none}
+  .visual-workspace.review-diagram #list{display:none}
+  .workspace-bar{gap:5px}
+  .workspace-bar input{max-width:none;min-width:140px}
+  .review-sections{max-height:120px;overflow:auto}
+  .section-label{min-width:52px}
+  .visual-workspace.workspace-reader>main{grid-template-areas:"canvas";grid-template-rows:minmax(0,1fr)}
+}

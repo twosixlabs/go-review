@@ -10,11 +10,15 @@
 # wasm-review checks component review guards and dependency flow regressions;
 # current-review checks latest-only storage and review UI; current-storage,
 # current-api and current-ui isolate its storage, API and UI regressions;
+# workspace checks structural layout, contextual navigation and Application regressions;
 # mcp checks shared query and MCP transport; mcp-build builds server/client;
 # mcp-live URL compares MCP with UI projections; preview renders SVGs with Quick Look.
 set -eu
 cd "$(dirname "$0")/.."
 case "${1:-sources}" in
+  workspace)
+    node --test internal/webui/workspace_ui_test.js internal/webui/endpoint_flow_test.js internal/webui/repository_ui_test.js
+    ;;
   current-storage)
     go test ./internal/review -run '^TestCurrentReview|^TestReviewReplacement|^TestRepositoryReviewSkipped' -count=1
     ;;
@@ -102,5 +106,5 @@ case "${1:-sources}" in
     mkdir -p .work
     go build -o .work/go-review-functional-check ./cmd/go-review
     ;;
-  *) echo "usage: sh scripts/test-functional-walkthrough.sh [current-review|current-storage|current-api|current-ui|wasm-review|entries|sources|system|branches|execution|runtime|api|ui|frontend|build|backend|mcp|mcp-build|all] or [builder|wasm MODULE_DIR EVIDENCE_DIR] or [builder-ui|preview|visual-fixtures EVIDENCE_DIR] or [endpoint-ui SNAPSHOT] or [endpoint-live-ui URL] or [mcp-live MCP_URL]" >&2; exit 2 ;;
+  *) echo "usage: sh scripts/test-functional-walkthrough.sh [workspace|current-review|current-storage|current-api|current-ui|wasm-review|entries|sources|system|branches|execution|runtime|api|ui|frontend|build|backend|mcp|mcp-build|all] or [builder|wasm MODULE_DIR EVIDENCE_DIR] or [builder-ui|preview|visual-fixtures EVIDENCE_DIR] or [endpoint-ui SNAPSHOT] or [endpoint-live-ui URL] or [mcp-live MCP_URL]" >&2; exit 2 ;;
 esac

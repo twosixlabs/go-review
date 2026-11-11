@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Go Review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/exploration.css"><link rel="stylesheet" href="/application.css"><link rel="stylesheet" href="/assessment.css"><link rel="stylesheet" href="/visual-review.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Go Review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/exploration.css"><link rel="stylesheet" href="/application.css"><link rel="stylesheet" href="/assessment.css"><link rel="stylesheet" href="/visual-review.css"><link rel="stylesheet" href="/workspace.css"></head>
 <body>
 <header><strong>Go Review</strong><span>Visual code exploration · measured evidence, no AI required</span></header>
 <form id="open"><label for="directory">Repository</label><input id="directory" placeholder="/path/to/repository" required><button id="review-repository" title="Runs static checks and in-scope unit tests with coverage. Saved selections restrict execution; otherwise all in-scope tests run. Only review repositories you trust.">Review repository</button><button id="analyze-only" type="button">Analyze only</button><details><summary>Static exploration options</summary><label for="docdir">Docs</label><input id="docdir" placeholder="Optional documentation directory"></details></form>
@@ -26,19 +26,26 @@
 <pre id="review-command" aria-label="Running command" hidden></pre>
 <span id="review-connection"></span>
 </section>
-<nav class="workspace-bar" aria-label="Review workspace"><strong>Go Review</strong><select id="review-modules" aria-label="Reviewed Go module" hidden></select><button id="application">Application</button><button id="back">← Back</button><input id="search" type="search" aria-label="Find symbols or documentation" placeholder="Find symbol or documentation"><button id="workspace-evidence" aria-pressed="false">Selected evidence</button><button id="workspace-chat" aria-expanded="false">Chat</button><button id="workspace-setup" aria-expanded="false">Repository &amp; scope</button><button id="workspace-tools" aria-expanded="false">Tools</button></nav>
-<details id="advanced-tools"><summary>Advanced review tools</summary>
-<div class="review-run"><button id="review-results" type="button" hidden>Review results</button><button id="scope-results" type="button">Applied scope &amp; exclusions</button></div>
-<nav class="workspace-secondary" aria-label="Structural tools"><button id="system-context">System context</button><button id="system-components">Components &amp; exchanges</button><button id="packages">Package map</button><button id="architecture-signals">Architecture signals</button><button id="hygiene">Hygiene</button><label><input id="external" type="checkbox"> External calls</label><button id="docs">Markdown docs</button><button id="evidence">Evidence &amp; limits</button></nav>
-<nav class="assessment" aria-label="Behavior evidence">
-<button id="review-map">Review map</button>
+<nav class="workspace-bar" aria-label="Review workspace"><strong>Go Review</strong><select id="review-modules" aria-label="Reviewed Go module" hidden></select><button id="back">← Back</button><input id="search" type="search" aria-label="Find symbols or documentation" placeholder="Find symbol or documentation"><button id="workspace-evidence" aria-pressed="false">Details</button><button id="workspace-chat" aria-expanded="false">Chat</button><button id="workspace-setup" aria-expanded="false">Repository &amp; scope</button><button id="workspace-tools" aria-expanded="false">View options</button></nav>
+<nav class="review-sections" aria-label="Review sections">
+<div role="group" aria-label="Explore structure"><span class="section-label">Explore</span><button id="application">Application</button><button id="system-context">System context</button><button id="system-components">Components &amp; exchanges</button><button id="packages">Packages</button></div>
+<div role="group" aria-label="Assess code"><span class="section-label">Assess</span><button id="review-map">Review map</button><button id="architecture-signals">Architecture signals</button><button id="hygiene">Checks &amp; hygiene</button></div>
+<div class="review-run" role="group" aria-label="Review evidence"><span class="section-label">Evidence</span><button id="docs">Documentation</button><button id="review-results" type="button" hidden>Review results</button><button id="scope-results" type="button">Applied scope</button><button id="evidence">Analysis limits</button></div>
+</nav>
+<nav class="assessment function-views" aria-label="Function views">
+<span id="function-view-hint">Select a function to inspect its behavior</span>
 <button id="logical-flow">Logical flow</button>
-<button id="function-flow">Function control flow</button><button id="data-flow">Value data flow</button><button id="call-map">Call relationships</button><details class="manual-evidence"><summary>Test evidence</summary><button id="run-tests">Collect selected unit tests</button><button id="import-coverage">Import coverage</button></details>
+<button id="function-flow">Control flow</button><button id="data-flow">Data flow</button><button id="call-map">Call relationships</button>
+</nav>
+<details id="advanced-tools"><summary>View options &amp; test evidence</summary>
+<div class="view-options">
+<label><input id="external" type="checkbox"> External calls</label>
 <label><input id="show-comments" type="checkbox" checked> Comments on steps</label>
 <label><input id="show-unreachable" type="checkbox"> Unreachable blocks</label>
 <label title="Control-flow only; expand individual blocks to inspect every statement"><input id="compact-statements" type="checkbox" checked> Group simple steps</label>
 <span id="coverage-summary">Coverage: not loaded</span>
-</nav>
+<details class="manual-evidence"><summary>Collect or import test evidence</summary><button id="run-tests">Collect selected unit tests</button><button id="import-coverage">Import coverage</button></details>
+</div>
 </details>
 <main><aside id="list" aria-label="Explorer"></aside><section id="canvas"><div id="breadcrumb"></div><div id="signal-summary" aria-label="Repository architecture and hygiene"></div><div class="tools"><button id="zoomout" aria-label="Zoom out">−</button><button id="zoomin" aria-label="Zoom in">+</button><button id="fit">Fit</button><button id="reset-layout" title="Reset node positions for this diagram">Reset layout</button><span id="legend">→ package dependency · select a node to explore</span></div><section id="application-overview" aria-label="Application overview" hidden></section><section id="activity-overview" aria-label="Overall activity flow" hidden></section><svg id="graph" role="img" aria-label="Interactive code diagram" tabindex="0"></svg><div class="graph-hint">Drag nodes to rearrange · drag background to pan · Alt + arrows moves a focused node</div></section><aside id="detail" aria-label="Selected evidence"><h2>Explore application</h2><p>Open a module to discover HTTP registrations and startup entries, then follow their implementations.</p></aside></main>
 <script src="/vendor/marked.umd.js"></script><script src="/vendor/purify.min.js"></script><script src="/markdown.js"></script>
@@ -48,6 +55,7 @@
 <script src="/assessment-tools.js"></script><script src="/assessment.js"></script>
 <script src="/visual-review-tools.js"></script><script src="/review-query-tools.js"></script><script src="/visual-review.js"></script>
 <script src="/repository.js"></script>
+<script src="/workspace.js"></script>
 <aside id="chat-panel" aria-label="Local review chat" hidden>
 <div class="chat-heading"><strong>Review assistant</strong><button id="chat-clear" type="button">Clear chat</button><button id="chat-close" type="button" aria-label="Close chat">Close</button></div>
 <div id="chat-model"></div><div id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite"></div><div id="chat-status" role="status"></div>

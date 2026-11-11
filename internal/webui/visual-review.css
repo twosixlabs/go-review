@@ -16,7 +16,7 @@
 .review-parent-edge{fill:none;stroke:#91abc9;stroke-width:1.2}
 .review-parent-edge.asynchronous{stroke-dasharray:4 3}
 #canvas>#activity-overview{padding:0;display:flex;flex-direction:column;overflow:hidden}
-.review-viewport{flex:1;min-height:0;overflow:auto;padding:16px;outline-offset:-3px}
+.review-viewport{flex:1;min-height:0;overflow:hidden;padding:16px;outline-offset:-3px;touch-action:none;cursor:grab}
 .review-stage{position:relative}
 .review-board{position:absolute;left:0;top:0;width:max-content;isolation:isolate;transform-origin:top left}
 .review-columns{display:grid;grid-template-columns:max-content;grid-auto-columns:max-content;column-gap:100px;row-gap:55px;align-items:start;padding:16px 16px 32px;position:relative;pointer-events:none}
@@ -26,7 +26,7 @@
 .review-async-lane{border-left:1px dashed #6b94b5;padding-left:16px;width:276px}
 .review-async-lane h2{font-size:12px;color:#a6b7cd;margin:0}
 .review-node{pointer-events:none;position:relative;border:1px solid transparent;border-radius:8px}
-.review-node-face{pointer-events:auto;background:#182b40;border:1px solid #6b94b5;border-radius:7px;padding:9px;display:flex;flex-direction:column;gap:5px;min-height:135px;width:258px;box-sizing:border-box;margin-inline:auto}
+.review-node-face{pointer-events:auto;background:#182b40;border:1px solid #6b94b5;border-radius:7px;padding:9px;display:flex;flex-direction:column;gap:5px;min-height:135px;width:258px;box-sizing:border-box;margin-inline:auto;cursor:move;user-select:none}
 .review-node.selected-activity>.review-node-face{border-color:#b4e1ff;box-shadow:inset 3px 0 #95d0fc}
 .review-node-kind{color:#93d6bd;font-size:10px;text-transform:uppercase}
 .review-node .activity-select{background:transparent;border:0;text-align:left;padding:0 2px;font-size:14px;font-weight:650;overflow-wrap:anywhere;white-space:normal}
