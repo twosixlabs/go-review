@@ -55,6 +55,7 @@ test('scope editor saves explicit exclusions without running or refiltering a re
     await new Promise(resolve=>setImmediate(resolve));
     const doc=dom.window.document;
     doc.querySelector('#directory').value='/repo';
+    assert.equal(doc.querySelector('#scope-verification').checked,true,'new scopes include repository verification');
     assert.ok(doc.querySelector('#review-scope'),'review needs a discoverable scope editor');
     assert.equal(dom.window.getComputedStyle(doc.querySelector('.review-run')).display,'flex','applied scope must remain visible for standalone analysis results');
     doc.querySelector('#scope-load').click();
@@ -70,7 +71,7 @@ test('scope editor saves explicit exclusions without running or refiltering a re
     assert.equal(saved.verifyRepository,false);
     assert.match(doc.querySelector('#scope-status').textContent,/next review/i);
     assert.equal(requests.filter(r=>r.options?.method==='POST'&&r.url!=='/api/review/scope').length,0);
-    assert.match(doc.querySelector('#review-scope').textContent,/separately authorize/i);
+    assert.match(doc.querySelector('#review-scope').textContent,/enabled by default in new scopes/i);
     dom.window.fetch=async()=>({ok:false,json:async()=>({error:'invalid test exclusion'})});
     doc.querySelector('#scope-save').click();
     await new Promise(resolve=>setImmediate(resolve));

@@ -199,7 +199,7 @@ func ReviewRepository(ctx context.Context, dir, storage string, progress func(Re
 	hookReport := &Report{}
 	hook := step("repository-hygiene", "Repository verification", "", func(s *ReviewStep) {
 		if !scope.VerifyRepository {
-			s.Status, s.Detail = "not-run", "Repository scripts require separate authorization in review scope; they are not run to collect behavior evidence."
+			s.Status, s.Detail = "not-run", "Repository verification is disabled in the saved review scope."
 			return
 		}
 		if why := scope.pathReason("scripts/verify-repository.sh"); why != "" {

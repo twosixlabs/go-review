@@ -8,13 +8,13 @@ import (
 	"testing"
 )
 
-func TestFlowExecutionRepositoryDefaultsToAllTestsWithCoverageButNotHooks(t *testing.T) {
+func TestFlowExecutionRepositoryDefaultsToAllTestsWithCoverageAndVerification(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "unselected-ran")
 	writeReviewFixture(t, root, "go.mod", "module example.test/noimplicit\n\ngo 1.24\n")
 	writeReviewFixture(t, root, "source.go", "package noimplicit\nfunc Run(){}\n")
 	writeReviewFixture(t, root, "source_test.go", "package noimplicit\nimport (\"os\";\"testing\")\nfunc TestUnselected(t *testing.T){os.WriteFile(\"unselected-ran\",nil,0600)}\n")
-	writeReviewFixture(t, root, "scripts/verify-repository.sh", "#!/bin/sh\ntouch unselected-ran\n")
+	writeReviewFixture(t, root, "scripts/verify-repository.sh", "#!/bin/sh\ntouch verification-ran\n")
 	static, err := Analyze(context.Background(), Options{Dir: root})
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +24,9 @@ func TestFlowExecutionRepositoryDefaultsToAllTestsWithCoverageButNotHooks(t *tes
 	}
 	if _, err = os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("Analyze executed tests")
+	}
+	if _, err = os.Stat(filepath.Join(root, "verification-ran")); !os.IsNotExist(err) {
+		t.Fatal("Analyze executed repository verification")
 	}
 	run, err := ReviewRepository(context.Background(), root, t.TempDir(), nil)
 	if err != nil {
@@ -39,10 +42,8 @@ func TestFlowExecutionRepositoryDefaultsToAllTestsWithCoverageButNotHooks(t *tes
 	if r.Coverage == nil || !r.Coverage.SourceVerified {
 		t.Fatal("default review must retain verified coverage")
 	}
-	for _, command := range r.Commands {
-		if command.Executable == "bash" {
-			t.Fatalf("repository hook ran without separate authorization: %+v", command)
-		}
+	if _, err = os.Stat(filepath.Join(root, "verification-ran")); err != nil {
+		t.Fatalf("default review did not execute verification: %v", err)
 	}
 }
 

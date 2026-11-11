@@ -249,11 +249,11 @@ function scopeDetailContent(target,scope,exclusions) {
   if(!scope?.root)el('p','This retained snapshot predates saved review scopes. Save a scope and run a new review to apply it.',target);
   else {
     el('p',`Scope root: ${scope.root}`,target);
-    el('p','Generated source excluded from review evidence, retained for build/type resolution. Repository scripts run only when separately authorized.',target);
+    el('p','Generated source excluded from review evidence, retained for build/type resolution. Repository verification is included by default in new scopes and runs only during an explicit review.',target);
     for(const pattern of scope.excludePaths||[])el('p','Path exclusion: '+pattern,target);
     for(const pattern of scope.excludeTests||[])el('p','Test-name exclusion: '+pattern,target);
     for(const selection of scope.unitSelections||[])el('p','Unit selection: '+selection.package+' :: '+selection.tests.join(', '),target);
-    el('p','Repository verification: '+(scope.verifyRepository?'separately authorized':'not authorized'),target);
+    el('p','Repository verification: '+(scope.verifyRepository?'included':'disabled in saved scope'),target);
   }
   for(const item of exclusions||[])el('p',`${item.path} — ${item.reason}`,target);
 }

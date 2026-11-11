@@ -151,7 +151,8 @@ Review is opinionated; there is no per-check configuration:
 - Collect application/call/control-flow structure, complexity, documentation,
   architecture signals, formatting, syntax and type-resolution checks.
 - Execute the conventional `scripts/verify-repository.sh` once from the repository
-  root only when separately authorized in Review scope, preserving its exit status and output. This can include
+  root by default for new review scopes, preserving its exit status and output.
+  Saved opt-outs and path exclusions are respected. This can include
   frontend, contract and acceptance checks that generic Go tooling cannot infer.
   An absent entry point is explicitly Not run; arbitrary scripts are not guessed.
 - Run `go vet` and bundled `golang.org/x/tools` rapid-type reachability analysis
@@ -222,10 +223,12 @@ explicitly indicate that they predate this policy.
   Package wildcards, test-name expressions and benchmarks are not selections.
   Leave this field empty to run all in-scope tests with coverage during Review.
   **Analyze only** never executes tests, regardless of the saved selections.
-- **Repository verification is separately authorized.** Its internal commands
-  own their scope, even when Go Review has exclusions. It never runs implicitly
-  to collect flow evidence. Missing authorization or an excluded script produces
-  a visible Not run result.
+- **Repository verification is included by default in new scopes.** Disable it
+  in Review scope to opt out; existing saved opt-outs remain disabled. Its
+  internal commands own their scope, even when Go Review has exclusions, and
+  may have filesystem, network or service side effects. It runs only during an
+  explicitly started Review, never Analyze only, browsing, chat or MCP.
+  A disabled or excluded script produces a visible Not run result.
 
 Rules are stored locally under the OS user configuration directory at
 `go-review/scopes/<repository-root-hash>.json`, not inside the target checkout.

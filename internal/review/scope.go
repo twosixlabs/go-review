@@ -21,7 +21,7 @@ type ReviewScope struct {
 	ExcludePaths     []string            `json:"excludePaths"`
 	ExcludeTests     []string            `json:"excludeTests"`
 	UnitSelections   []UnitTestSelection `json:"unitSelections,omitempty"`
-	VerifyRepository bool                `json:"verifyRepository,omitempty"`
+	VerifyRepository bool                `json:"verifyRepository"`
 }
 
 type ScopeExclusion struct {
@@ -49,6 +49,7 @@ func LoadReviewScope(dir string) (ReviewScope, error) {
 	}
 	data, err := os.ReadFile(name)
 	if os.IsNotExist(err) {
+		s.VerifyRepository = true
 		return s, nil
 	}
 	if err != nil {

@@ -4,7 +4,7 @@
 <body>
 <header><strong>Go Review</strong><span>Visual code exploration · measured evidence, no AI required</span></header>
 <form id="open"><label for="directory">Repository</label><input id="directory" placeholder="/path/to/repository" required><button id="review-repository" title="Runs static checks and in-scope unit tests with coverage. Saved selections restrict execution; otherwise all in-scope tests run. Only review repositories you trust.">Review repository</button><button id="analyze-only" type="button">Analyze only</button><details><summary>Static exploration options</summary><label for="docdir">Docs</label><input id="docdir" placeholder="Optional documentation directory"></details></form>
-<div class="review-consent">Review runs static checks and all in-scope unit tests with coverage unless saved selections restrict execution. Repository scripts require separate scope authorization. Analyze only never runs target tests.</div>
+<div class="review-consent">Review runs static checks and all in-scope unit tests with coverage unless saved selections restrict execution. Repository verification is included by default in new scopes; its script may have filesystem, network or service side effects. Analyze only never runs target tests or verification scripts.</div>
 <details id="review-scope" class="review-scope"><summary>Review scope</summary>
 <p>Generated sources (including WIT bindings) are automatically excluded from review findings, gauges, coverage totals and normal graphs. They remain available to compile and resolve handwritten code.</p>
 <label for="scope-paths">Excluded paths — one repository-relative pattern per line; directory matches include descendants; ** matches any depth</label>
@@ -14,7 +14,7 @@
 <p>Selected unit tests honor these exclusions. Required helpers, init functions, TestMain and dependencies may still run. Subtest exclusions require excluding the parent test or file.</p>
 <label for="scope-unit-tests">Selected unit tests — one import-path::TestName,TestName per line. Leave empty to run all in-scope tests with coverage during Review.</label>
 <textarea id="scope-unit-tests" rows="3" placeholder="example.com/project/server::TestCreate,TestReject"></textarea>
-<label><input id="scope-verification" type="checkbox"> Separately authorize scripts/verify-repository.sh. Its commands have their own scope and may run broader checks.</label>
+<label><input id="scope-verification" type="checkbox" checked> Include scripts/verify-repository.sh during Review (enabled by default in new scopes). Its commands have their own scope and may run broader checks.</label>
 <button id="scope-load" type="button">Load saved scope</button><button id="scope-save" type="button">Save scope</button><span id="scope-status" role="status">Saved per repository on this machine; reused by the Review button and CLI. Existing results keep their original scope.</span>
 </details>
 <div id="status" role="status">Choose a repository to review production architecture. Review runs all in-scope unit tests with coverage unless selections restrict execution.</div>

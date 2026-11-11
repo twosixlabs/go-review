@@ -336,8 +336,10 @@ Initialization, TestMain and dependencies can execute: this is trusted-code
 execution, not a sandbox. Normal Go test execution includes examples and fuzz
 seeds, not benchmarks or fuzz campaigns. Integration and smoke tests must be
 excluded explicitly if undesired; the application is not launched separately.
-Repository verification requires separate
-authorization. Browsing and reopening retained results never run collection.
+Repository verification is enabled by default for new review scopes during
+explicit Review execution. Saved opt-outs (including older scopes) and script
+path exclusions remain effective. Analyze only, chat, MCP, browsing and reopening
+retained results never execute repository verification.
 
 Evidence storage is latest-only per canonical repository root. Publishing a new
 review, selected-test refresh, or static analysis removes superseded run
