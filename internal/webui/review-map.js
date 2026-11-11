@@ -60,10 +60,26 @@ function renderReviewMap() {
   const nameLabel=el('label','Name',$('list'));nameLabel.htmlFor='review-name';
   const name=el('input',undefined,$('list'));name.id='review-name';name.type='search';name.value=mode.query||'';
   name.placeholder='Function or qualified name';
+  const coverageLabel=el('label','Coverage availability',$('list'));coverageLabel.htmlFor='review-coverage';
+  const coverage=el('select',undefined,$('list'));coverage.id='review-coverage';
+  for(const [value,title] of [['all','All coverage states'],['known','Known coverage'],['unknown','Unknown coverage']]) {
+    const option=el('option',title,coverage);option.value=value;
+  }
+  coverage.value=mode.coverage||'all';
+  const minimumLabel=el('label','Minimum complexity',$('list'));minimumLabel.htmlFor='review-min-complexity';
+  const minimum=el('input',undefined,$('list'));minimum.id='review-min-complexity';minimum.type='number';minimum.min=0;
+  minimum.value=mode.minComplexity??'';
+  const maximumLabel=el('label','Maximum known coverage (%)',$('list'));maximumLabel.htmlFor='review-max-coverage';
+  const maximum=el('input',undefined,$('list'));maximum.id='review-max-coverage';maximum.type='number';maximum.min=0;maximum.max=100;
+  maximum.value=mode.maxCoverage??'';
   const filter=()=>{
-    mode={kind:'review',package:packages.value,query:name.value,viewport:{...pan}};render();
+    if(!minimum.checkValidity()||!maximum.checkValidity()){minimum.reportValidity();maximum.reportValidity();return;}
+    mode={kind:'review',package:packages.value,query:name.value,coverage:coverage.value,
+      minComplexity:minimum.value===''?undefined:Number(minimum.value),
+      maxCoverage:maximum.value===''?undefined:Number(maximum.value),viewport:{...pan}};render();
   };
   packages.onchange=filter;
+  coverage.onchange=filter;minimum.onchange=filter;maximum.onchange=filter;
   name.oninput=()=>{
     const start=name.selectionStart,end=name.selectionEnd;filter();
     $('review-name').focus();$('review-name').setSelectionRange(start,end);
@@ -72,8 +88,7 @@ function renderReviewMap() {
   if(cohort)button('Show all filtered functions',()=>{
     mode={...mode,cohort:undefined,page:0,viewport:{...pan}};render();
   },$('list'));
-  const records=[...(cohort?cohort.members:plot.records)].sort((a,b)=>b.complexity-a.complexity||
-    (a.coverage.value??101)-(b.coverage.value??101)||a.symbol.qualified.localeCompare(b.symbol.qualified));
+  const records=[...(cohort?cohort.members:plot.records)].sort(GoReviewMap.compareRecords);
   const pageSize=30,page=Math.min(mode.page||0,Math.max(0,Math.ceil(records.length/pageSize)-1)),start=page*pageSize;
   el('h3',cohort?'At this marker':'Functions · complexity descending',$('list'));
   for(const record of records.slice(start,start+pageSize)) {

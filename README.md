@@ -3,7 +3,7 @@
 ## Optional review assistant
 
 The **Chat** button opens an evidence-backed assistant. It uses the same
-nine read-only MCP tools as external reviewers, not filesystem or shell access.
+twelve read-only MCP tools as external reviewers, not filesystem or shell access.
 Responses distinguish model assessments from collected facts; gauges remain
 measured evidence, not an AI quality score.
 The assistant starts from your question and current view, establishes purpose
@@ -341,7 +341,8 @@ Its `purposeDocument` identifies the same project-documentation entry as the UI;
 read it with `review_document` rather than treating a missing package doc as a
 missing project purpose.
 Use the returned `snapshot.id` as `snapshotID` in subsequent calls. This digest
-identifies the complete retained report, including coverage and test evidence,
+identifies the complete retained report, including coverage, test evidence and
+its associated repository-run summary,
 not just its source revision. Module selection through MCP never changes the UI.
 Replaced evidence produces a stale-snapshot error rather than silently changing
 the meaning of an existing node ID.
@@ -368,6 +369,22 @@ and configuration document IDs. Read those IDs with `review_document`.
   retained output. Test-run inventories
   contain counts; `runIndex` reveals paginated matched tests and outcomes rather
   than repeating every test name in every function inspection.
+- `review_assess`: the same Review Map records, cohorts, priority order and
+  package/name/complexity/coverage filters as the UI. Unknown coverage is not
+  zero; a maximum-coverage filter excludes it. `findingID` reads a full signal's
+  evidence; `ruleID` reads the corresponding heuristic description.
+- `review_dataflow`: retained SSA definitions/uses, with `valueID`, `direction`
+  and `depth` reproducing the UI slice. Nodes, edges and limitations are paged.
+  Missing legacy collection and unsupported bodies remain explicit.
+- `review_results`: repository-wide module failures, stages, skipped work and
+  scope. Select `stepID` for stage `detail` or `commands`; add `commandIndex` and
+  `section: "stdout"` / `"stderr"` for full paged command output.
+
+Chat refreshes evidence for the current view, including selected findings,
+checks, stages and value slices. Its validated navigation can open Review Map,
+signals, hygiene, results, scope/limits, function logical/control/call/value
+views and architecture focus, using existing UI behavior and wide readers.
+These operations never authorize target execution or a new review.
 
 Discovery does not inline full membership, file/import inventories, CFGs,
 architecture component catalogs, comments or command output. Responses list
@@ -770,9 +787,12 @@ marked boundaries. No alias analysis or store-to-load lineage is claimed.
 Closures expose captured inputs without inventing their origins in another
 function. Runtime values are not captured.
 
-Collection is local and on demand, requires matching snapshot inputs, and
-never executes target tests. Unsupported functions, type errors, and changed
-source produce visible errors rather than an invented graph. Some compiler
+Collection happens during the initial review, once per package, using the
+already-parsed and type-checked source. Graphs and explicit unavailable outcomes
+are persisted in the immutable report; collection never executes target tests.
+Browsing does not rerun Go tooling or consult the live checkout. Older reports
+without SSA explain that a new explicit review is required. Unsupported functions
+and type errors produce visible reasons rather than an invented graph. Some compiler
 instructions have no exact source position; the UI identifies this instead of
 assigning a misleading location. Nearby comments are attributed as nearby
 source text, not certified explanations of SSA operations.
@@ -780,8 +800,9 @@ source text, not certified explanations of SSA operations.
 Supporting clients can read `/api/snapshot`, then POST
 `{"symbolID":"…","sourceSHA256":"…"}` as `application/json` to `/api/dataflow`.
 The response contains the selected graph and its collector/command provenance;
-it does not mutate the snapshot or start tests. Requests for an older snapshot
-are rejected. Graphs are held only in the browser's current snapshot session.
+it reads the retained snapshot without running analysis or tests. Requests for
+a different source snapshot are rejected. The browser reads the same persisted
+`dataFlows` evidence directly; changing or removing the checkout does not change it.
 
 Interprocedural data flow, alias analysis, mutation/test-strength measures,
 use-case mapping, semantic indexing, and revision/PR review remain in the full

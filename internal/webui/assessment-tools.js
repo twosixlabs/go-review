@@ -131,7 +131,9 @@
     add('p',`${h.passed}/${h.completed} completed checks passed · ${h.errors} error${h.errors===1?'':'s'} · ${h.notRun} not run. Snapshot-wide results, not per-function measurements. Each check identifies its source, module or repository scope.`,hygiene);
     const checkLabels={pass:'Pass',fail:'Fail',error:'Error','not-run':'Not run'};
     for(const check of m.checks) {
-      const row=add('details',undefined,hygiene);add('summary',`${checkLabels[check.status]||check.status} · ${check.title}`,row);
+      const row=add('details',undefined,hygiene);row.dataset.check=check.id;
+      row.open=options.checkID===check.id;
+      add('summary',`${checkLabels[check.status]||check.status} · ${check.title}`,row);
       add('pre',check.detail,row);
       for(const location of check.locations||[]) {
         const file=(report.files||[]).find(f=>f.id===location.fileID);

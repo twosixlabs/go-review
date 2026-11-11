@@ -354,20 +354,30 @@ func outer(x int) func() int { return func() int { return x + 3 } }
 	}
 }
 
-func TestDataFlowRejectsStaleUnsupportedAndTypeErrors(t *testing.T) {
+func TestDataFlowRetainsEvidenceDespiteCheckoutChanges(t *testing.T) {
 	r := dataFixture(t, "func f(x int) int { return x + 1 }\n")
 	file := filepath.Join(r.Root, r.Files[0].Path)
 	if err := os.WriteFile(file, []byte(r.Files[0].Source+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Fatalf("stale source accepted: %v", err)
+	before, _ := json.Marshal(r)
+	flow, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID)
+	if err != nil || len(flow.Nodes) == 0 {
+		t.Fatalf("retained graph depended on current checkout: %v", err)
 	}
+	after, _ := json.Marshal(r)
+	if string(before) != string(after) {
+		t.Fatal("read mutated snapshot")
+	}
+}
+
+func TestDataFlowRejectsUnsupportedAndTypeErrors(t *testing.T) {
 	broken := dataFixture(t, "func f() int { return missing }\n")
 	if _, err := AnalyzeDataFlow(context.Background(), broken, symbol(t, broken, "f").ID); err == nil {
 		t.Fatal("type errors silently accepted")
 	}
+
 	generic := dataFixture(t, "func f[T any](x T) T { return x }\n")
 	if _, err := AnalyzeDataFlow(context.Background(), generic, symbol(t, generic, "f").ID); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("generic unsupported status not explicit: %v", err)
@@ -379,6 +389,62 @@ func TestDataFlowRejectsStaleUnsupportedAndTypeErrors(t *testing.T) {
 	cancel()
 	if _, err := AnalyzeDataFlow(ctx, generic, symbol(t, generic, "f").ID); err != context.Canceled {
 		t.Fatalf("cancellation lost: %v", err)
+	}
+}
+
+func TestDataFlowInitialReviewRetainsAllResultsWithoutExtraGoCommands(t *testing.T) {
+	r := dataFixture(t, "func f(x int) int { return x+1 }\nfunc g[T any](x T) T { return x }\n")
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		DataFlows *struct {
+			SourceSHA256 string    `json:"sourceSHA256"`
+			Commands     []Command `json:"commands"`
+			Results      []struct {
+				SymbolID, Status, Error string
+				Graph                   *DataFlow
+			} `json:"results"`
+		} `json:"dataFlows"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.DataFlows == nil || saved.DataFlows.SourceSHA256 != r.SourceSHA256 {
+		t.Fatal("initial analysis did not persist snapshot-bound SSA")
+	}
+	status := map[string]string{}
+	for _, result := range saved.DataFlows.Results {
+		status[result.SymbolID] = result.Status
+		if result.Graph != nil && len(result.Graph.Commands) != 0 {
+			t.Fatal("per-function graphs duplicate collection commands")
+		}
+	}
+	if len(saved.DataFlows.Commands) == 0 {
+		t.Fatal("shared collection provenance missing")
+	}
+	if status[symbol(t, r, "f").ID] != "available" || status[symbol(t, r, "g").ID] != "unsupported" {
+		t.Fatalf("missing explicit outcomes: %v", status)
+	}
+	for _, command := range r.Commands {
+		if strings.Contains(strings.Join(command.Args, " "), "list -mod=readonly -deps -export -json .") &&
+			!strings.Contains(strings.Join(command.Args, " "), "./...") {
+			t.Fatalf("SSA reran per-function package discovery: %v", command.Args)
+		}
+	}
+	var restored Report
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	restored.Root = filepath.Join(t.TempDir(), "does-not-exist")
+	flow, err := AnalyzeDataFlow(context.Background(), &restored, symbol(t, r, "f").ID)
+	if err != nil || len(flow.Nodes) == 0 {
+		t.Fatalf("persisted SSA requires checkout: %v", err)
+	}
+	legacy := &Report{Symbols: r.Symbols, SourceSHA256: r.SourceSHA256}
+	if _, err := AnalyzeDataFlow(context.Background(), legacy, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "not collected") {
+		t.Fatalf("legacy absence not explicit: %v", err)
 	}
 }
 
@@ -465,30 +531,30 @@ func choose(input any) int {
 	}
 }
 
-func TestDataFlowRejectsChangedBuildAndSourceSet(t *testing.T) {
+func TestDataFlowReadsAreIndependentOfBuildAndSourceSet(t *testing.T) {
 	r := dataFixture(t, "func f() {}\n")
 	r.Environment["GOARCH"] = "not-a-real-architecture"
-	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "environment") {
-		t.Fatalf("changed build environment accepted: %v", err)
+	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err != nil {
+		t.Fatalf("read consulted build environment: %v", err)
 	}
 
 	r = dataFixture(t, "func f() {}\n")
 	if err := os.WriteFile(filepath.Join(r.Root, "new.go"), []byte("package fixture\nfunc added() {}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "source set changed") {
-		t.Fatalf("new package source accepted: %v", err)
+	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err != nil {
+		t.Fatalf("read consulted new package source: %v", err)
 	}
 	r = dataFixture(t, "func f() {}\n")
 	if err := os.WriteFile(filepath.Join(r.Root, "go.mod"), []byte("module changed\n\ngo 1.24.0\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "manifest changed") {
-		t.Fatalf("changed manifest accepted: %v", err)
+	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err != nil {
+		t.Fatalf("read consulted changed manifest: %v", err)
 	}
 	r = dataFixture(t, "func f() {}\n")
-	r.Files[0].Path = "flow_test.go"
-	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "unsupported test") {
-		t.Fatalf("test variant accepted: %v", err)
+	r.SourceSHA256 = "wrong"
+	if _, err := AnalyzeDataFlow(context.Background(), r, symbol(t, r, "f").ID); err == nil || !strings.Contains(err.Error(), "match snapshot") {
+		t.Fatalf("mismatched retained graph accepted: %v", err)
 	}
 }

@@ -175,6 +175,8 @@ function repositoryRunDetail() {
   }
   for(const step of repositoryRun.steps||[]) {
     const row=el('details',undefined,target);
+    row.dataset.reviewStep=step.id;
+    row.open=step.id===mode.reviewStepID;
     el('summary',`${step.status} · ${step.title}${step.module?' · '+step.module:''}`,row);
     if(step.detail)el('pre',step.detail,row);
     for(const command of step.commands||[])

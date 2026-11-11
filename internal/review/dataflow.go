@@ -1,21 +1,15 @@
 package review
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/importer"
-	"go/parser"
 	"go/token"
 	"go/types"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"golang.org/x/tools/go/ssa"
@@ -32,7 +26,7 @@ type DataFlow struct {
 	Collector    string     `json:"collector"`
 	ToolVersion  string     `json:"toolVersion"`
 	GeneratedAt  time.Time  `json:"generatedAt"`
-	Commands     []Command  `json:"commands"`
+	Commands     []Command  `json:"commands,omitempty"`
 }
 
 type DataNode struct {
@@ -51,10 +45,8 @@ type DataEdge struct {
 	Label string `json:"label"`
 }
 
-// AnalyzeDataFlow never mutates snapshot or executes target tests. It checks
-// snapshot sources and manifests before and after read-only Go tooling, then
-// builds package SSA from the verified embedded source. The checks are best
-// effort, not a filesystem transaction; dependency export data is current-build.
+// AnalyzeDataFlow reads initial-review evidence only. Legacy snapshots require
+// a new explicit review; browsing never consults or executes the live checkout.
 func AnalyzeDataFlow(ctx context.Context, snapshot *Report, symbolID string) (*DataFlow, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -62,60 +54,37 @@ func AnalyzeDataFlow(ctx context.Context, snapshot *Report, symbolID string) (*D
 	if snapshot == nil {
 		return nil, fmt.Errorf("data flow: snapshot is required")
 	}
-	var selected *Symbol
-	for i := range snapshot.Symbols {
-		if snapshot.Symbols[i].ID == symbolID {
-			selected = &snapshot.Symbols[i]
+	found := false
+	for _, symbol := range snapshot.Symbols {
+		if symbol.ID == symbolID {
+			found = true
 			break
 		}
 	}
-	if selected == nil {
+	if !found {
 		return nil, fmt.Errorf("data flow: unknown symbol %q", symbolID)
 	}
-	if selected.Kind != "function" && selected.Kind != "method" && selected.Kind != "closure" {
-		return nil, fmt.Errorf("data flow: unsupported symbol kind %q", selected.Kind)
+	if snapshot.DataFlows == nil {
+		return nil, fmt.Errorf("data flow: not collected in this review; run a new explicit review")
 	}
-	var source *File
-	for i := range snapshot.Files {
-		if snapshot.Files[i].ID == selected.FileID {
-			source = &snapshot.Files[i]
-			break
+	if snapshot.DataFlows.SourceSHA256 != snapshot.SourceSHA256 {
+		return nil, fmt.Errorf("data flow: retained evidence does not match snapshot")
+	}
+	for _, result := range snapshot.DataFlows.Results {
+		if result.SymbolID != symbolID {
+			continue
 		}
-	}
-	if source == nil || source.Package != selected.Package {
-		return nil, fmt.Errorf("data flow: selected source ownership is unavailable")
-	}
-	if strings.HasSuffix(source.Path, "_test.go") {
-		return nil, fmt.Errorf("data flow: unsupported test function; test variants are not loaded")
-	}
-	if err := verifyDataSources(ctx, snapshot); err != nil {
-		return nil, err
-	}
-	for _, p := range snapshot.Packages {
-		if p.Path == selected.Package && len(p.TypeErrors) > 0 {
-			return nil, fmt.Errorf("data flow: type checking unavailable: %s", strings.Join(p.TypeErrors, "; "))
+		if result.Status != "available" {
+			return nil, fmt.Errorf("data flow: %s: %s", result.Status, result.Error)
 		}
+		if result.Graph == nil || result.Graph.SymbolID != symbolID || result.Graph.SourceSHA256 != snapshot.SourceSHA256 {
+			return nil, fmt.Errorf("data flow: invalid retained graph identity")
+		}
+		graph := *result.Graph
+		graph.Commands = snapshot.DataFlows.Commands
+		return &graph, nil
 	}
-	a, p, err := loadDataPackage(ctx, snapshot, source)
-	if err != nil {
-		return nil, err
-	}
-	fn, err := buildDataFunction(a, p, selected)
-	if err != nil {
-		return nil, err
-	}
-	result, err := collectDataFlow(ctx, a, fn, selected, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	if err := verifyDataSources(ctx, snapshot); err != nil {
-		return nil, err
-	}
-	result.Collector = "golang.org/x/tools/go/ssa"
-	result.ToolVersion = dataToolVersion()
-	result.GeneratedAt = time.Now().UTC()
-	result.Commands = a.report.Commands
-	return result, nil
+	return nil, fmt.Errorf("data flow: unsupported symbol; no retained function result")
 }
 
 func dataToolVersion() string {
@@ -170,115 +139,7 @@ func verifyDataSources(ctx context.Context, r *Report) error {
 	return nil
 }
 
-func loadDataPackage(ctx context.Context, snapshot *Report, source *File) (*analyzer, *parsedPackage, error) {
-	// Command provenance belongs to this request, not the published snapshot.
-	scratch := &Report{Environment: snapshot.Environment}
-	dir := filepath.Dir(filepath.Join(snapshot.Root, filepath.FromSlash(source.Path)))
-	envData, err := runGo(ctx, scratch, dir, false, "env", "-json", "GOOS", "GOARCH", "CGO_ENABLED", "GOFLAGS", "GOWORK", "GOVERSION", "GOTOOLCHAIN", "GOMOD")
-	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("data flow: build environment unavailable: %w", err)
-	}
-	var environment map[string]string
-	if err := json.Unmarshal(envData, &environment); err != nil {
-		return nil, nil, fmt.Errorf("data flow: decode build environment: %w", err)
-	}
-	for _, key := range []string{"GOOS", "GOARCH", "CGO_ENABLED", "GOFLAGS", "GOWORK", "GOVERSION", "GOTOOLCHAIN", "GOMOD"} {
-		if previous, ok := snapshot.Environment[key]; ok && previous != environment[key] {
-			return nil, nil, fmt.Errorf("data flow: build environment changed since snapshot: %s", key)
-		}
-	}
-	scratch.Environment = environment
-	data, err := runGo(ctx, scratch, dir, false, "list", "-mod=readonly", "-deps", "-export", "-json", ".")
-	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("data flow: type checking/build unavailable: %w", err)
-	}
-	a := &analyzer{report: scratch, fset: token.NewFileSet(), packages: map[string]*parsedPackage{}, fileIDs: map[string]string{}, exports: map[string]string{}}
-	var target *parsedPackage
-	dec := json.NewDecoder(bytes.NewReader(data))
-	for {
-		var meta listedPackage
-		if err := dec.Decode(&meta); err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, nil, fmt.Errorf("data flow: decode build metadata: %w", err)
-		}
-		if meta.Export != "" {
-			a.exports[meta.ImportPath] = meta.Export
-		}
-		if meta.ImportPath == source.Package {
-			target = &parsedPackage{meta: meta}
-		}
-	}
-	if target == nil {
-		return nil, nil, fmt.Errorf("data flow: selected package is unavailable in current build")
-	}
-	if len(target.meta.CgoFiles) > 0 {
-		return nil, nil, fmt.Errorf("data flow: unsupported cgo package without generated bindings")
-	}
-	files := map[string]File{}
-	for _, f := range snapshot.Files {
-		if f.Package == source.Package && !strings.HasSuffix(f.Path, "_test.go") {
-			files[filepath.Clean(filepath.Join(snapshot.Root, filepath.FromSlash(f.Path)))] = f
-		}
-	}
-	for _, f := range snapshot.SupportingFiles {
-		if f.Package == source.Package && !strings.HasSuffix(f.Path, "_test.go") {
-			files[filepath.Clean(filepath.Join(snapshot.Root, filepath.FromSlash(f.Path)))] = f
-		}
-	}
-	if len(files) != len(target.meta.GoFiles) {
-		return nil, nil, fmt.Errorf("data flow: package source set changed since snapshot")
-	}
-	for _, name := range target.meta.GoFiles {
-		abs := filepath.Clean(filepath.Join(target.meta.Dir, name))
-		f, ok := files[abs]
-		if !ok {
-			return nil, nil, fmt.Errorf("data flow: package source set changed: %s", name)
-		}
-		parsed, err := parser.ParseFile(a.fset, abs, f.Source, 0)
-		if err != nil {
-			return nil, nil, fmt.Errorf("data flow: parse source: %w", err)
-		}
-		target.ast = append(target.ast, parsed)
-		a.fileIDs[abs] = f.ID
-	}
-	a.packages[source.Package] = target
-	a.fallback = importer.ForCompiler(a.fset, "gc", func(path string) (io.ReadCloser, error) {
-		if name := a.exports[path]; name != "" {
-			return os.Open(name)
-		}
-		return nil, fmt.Errorf("no build export data for %s", path)
-	})
-	// SSA needs implicit type-switch bindings, scopes and per-file language
-	// versions, beyond the symbol collector's intentionally smaller type info.
-	target.info = &types.Info{
-		Types:        map[ast.Expr]types.TypeAndValue{},
-		Defs:         map[*ast.Ident]types.Object{},
-		Uses:         map[*ast.Ident]types.Object{},
-		Implicits:    map[ast.Node]types.Object{},
-		Selections:   map[*ast.SelectorExpr]*types.Selection{},
-		Instances:    map[*ast.Ident]types.Instance{},
-		Scopes:       map[ast.Node]*types.Scope{},
-		FileVersions: map[*ast.File]string{},
-	}
-	config := types.Config{Importer: a, Sizes: types.SizesFor("gc", environment["GOARCH"])}
-	if target.meta.Module != nil && target.meta.Module.GoVersion != "" {
-		config.GoVersion = "go" + target.meta.Module.GoVersion
-	}
-	target.pkg, err = config.Check(source.Package, a.fset, target.ast, target.info)
-	if err != nil {
-		return nil, nil, fmt.Errorf("data flow: type checking unavailable: %w", err)
-	}
-	return a, target, nil
-}
-
-func buildDataFunction(a *analyzer, p *parsedPackage, selected *Symbol) (result *ssa.Function, err error) {
+func buildDataFunction(a *analyzer, p *parsedPackage, selected *Symbol, prog *ssa.Program) (result *ssa.Function, err error) {
 	// Unsupported library/build combinations must fail visibly, never publish a
 	// partial graph that looks like successful analysis.
 	defer func() {
@@ -311,22 +172,6 @@ func buildDataFunction(a *analyzer, p *parsedPackage, selected *Symbol) (result 
 	if sig.TypeParams().Len() > 0 || sig.RecvTypeParams().Len() > 0 {
 		return nil, fmt.Errorf("data flow: unsupported generic function or receiver")
 	}
-	prog := ssa.NewProgram(a.fset, ssa.SanityCheckFunctions)
-	var dependencies func(*types.Package)
-	dependencies = func(pkg *types.Package) {
-		if prog.Package(pkg) != nil {
-			return
-		}
-		for _, dep := range pkg.Imports() {
-			dependencies(dep)
-		}
-		prog.CreatePackage(pkg, nil, nil, true)
-	}
-	for _, dep := range p.pkg.Imports() {
-		dependencies(dep)
-	}
-	pkg := prog.CreatePackage(p.pkg, p.ast, p.info, true)
-	pkg.Build()
 	var find func(*ssa.Function) *ssa.Function
 	find = func(fn *ssa.Function) *ssa.Function {
 		if fn == nil {
@@ -359,7 +204,7 @@ func collectDataFlow(ctx context.Context, a *analyzer, fn *ssa.Function, symbol 
 		"Calls are opaque: arguments and the call result share an instruction, but no argument-to-return or interprocedural propagation is inferred. Dynamic call targets are unknown.",
 		"Pointer aliasing and memory state are unmodeled. Loads/stores, field/index addresses, maps and channels are explicit memory boundaries; no store-to-load edges are inferred.",
 		"No runtime values, target execution, or target tests. SSA may optimize away source expressions; compiler-generated instructions may have no source location.",
-		"Sources/manifests are checked before and after collection, not locked. Dependency export data is current-build, not historical snapshot evidence.",
+		"Collected during initial review from the same parsed/type-checked package sources. Dependency export data is from that review's build environment; source collection is not a filesystem transaction.",
 	}}
 	values := map[ssa.Value]string{}
 	instructions := map[ssa.Instruction]string{}

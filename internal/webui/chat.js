@@ -7,9 +7,17 @@ function chatNotice(text,error=false) {
 function chatContext() {
   const focusPath=[];let parent=mode.parentReview;
   while(parent) {if(parent.flowSymbolID)focusPath.unshift(parent.flowSymbolID);parent=parent.parentReview;}
+  const callable=['logical','symbol','dataflow','review'].includes(mode.kind);
   return {module:report?.module,kind:mode.kind,entryID:mode.kind==='endpoint'?mode.id:undefined,
     focusSymbolID:mode.flowSymbolID,focusPath,expandedIDs:mode.expandedActivities||[],
-    selected:mode.selected,documentID:mode.documentID,description:$('breadcrumb')?.textContent};
+    selected:mode.selected,documentID:mode.documentOpen?mode.documentID:undefined,description:$('breadcrumb')?.textContent,
+    symbolID:callable?mode.id:undefined,control:mode.kind==='symbol'&&typeof preferControl!=='undefined'?preferControl:undefined,
+    package:mode.kind==='package'?mode.id:mode.package,section:mode.section,
+    findingID:mode.kind==='signals'?mode.id:undefined,checkID:mode.checkID,
+    workspacePanel:mode.workspacePanel,stepID:mode.reviewStepID,
+    query:mode.query,minComplexity:mode.minComplexity,maxCoverage:mode.maxCoverage,coverage:mode.coverage,cohort:mode.cohort,
+    valueID:mode.value,direction:mode.direction,depth:Number.isFinite(mode.depth)?mode.depth:undefined,
+    level:mode.level,componentID:mode.componentID,operationID:mode.operationID,group:mode.group};
 }
 function chatFingerprint() {return JSON.stringify(chatContext());}
 function chatSave() {
@@ -58,6 +66,8 @@ const chatToolLabels={review_overview:'Reading application overview',review_flow
   review_inspect:'Inspecting a responsibility',review_source:'Reading source',review_document:'Reading documentation',
   review_evidence:'Inspecting implementation evidence',review_packages:'Exploring packages',
   review_search:'Searching retained evidence',review_architecture:'Examining architecture',
+  review_assess:'Examining review priorities and signals',review_dataflow:'Tracing retained value dependencies',
+  review_results:'Reading repository review results',
   recall_evidence:'Recalling earlier evidence',navigate_ui:'Preparing navigation'};
 function chatWorking(item,text) {
   item.activity.hidden=false;item.activity.classList.add('working');
@@ -147,7 +157,7 @@ async function chatNavigate(action,expectedFingerprint,signal) {
       const sourceResponse=await fetch('/api/snapshot?snapshotID='+encodeURIComponent(target.id),{signal});
       const next=await sourceResponse.json();
       if(!sourceResponse.ok)throw Error(next.error||'Unable to read retained module');
-      GoReviewChat.validate(next,action,target.id);
+      GoReviewChat.validate(next,action,target.id,typeof repositoryRun==='undefined'?null:repositoryRun);
       signal?.throwIfAborted();
       if(expectedFingerprint!==undefined&&chatFingerprint()!==expectedFingerprint)
         throw Error('View changed manually; automatic navigation cancelled.');
@@ -163,14 +173,30 @@ async function chatNavigate(action,expectedFingerprint,signal) {
       $('review-modules').value=selected.root;
       current.snapshot=target;
     }
-    GoReviewChat.validate(report,action,current.snapshot.id);
+    GoReviewChat.validate(report,action,current.snapshot.id,typeof repositoryRun==='undefined'?null:repositoryRun);
     if(action.view==='application')go({kind:'application'});
     else if(action.view==='back') {if(!history.length)throw Error('No parent view in navigation history');$('back').click();}
     else if(action.view==='packages')go({kind:'packages'});
     else if(action.view==='package')go({kind:'package',id:action.id});
-    else if(action.view==='symbol')go({kind:'logical',id:action.id});
+    else if(action.view==='symbol'||action.view==='logical')go({kind:'logical',id:action.id});
+    else if(action.view==='control'||action.view==='calls') {
+      const previousControl=preferControl;
+      preferControl=action.view==='control';go({kind:'symbol',id:action.id});
+      if(history.length)history.at(-1).workspaceControl=previousControl;
+    }
+    else if(action.view==='dataflow')go({kind:'dataflow',id:action.id,value:action.valueID,
+      direction:action.direction||'both',depth:action.depth??Infinity,all:!action.valueID});
+    else if(action.view==='review-map')go({kind:'review',id:action.id,package:action.package,query:action.query,
+      minComplexity:action.minComplexity,maxCoverage:action.maxCoverage,coverage:action.coverage,cohort:action.cohort});
+    else if(action.view==='signals')go({kind:'signals',id:action.id,package:action.package});
+    else if(action.view==='hygiene')go({kind:'signals',section:'hygiene',checkID:action.id});
+    else if(['results','scope','limits'].includes(action.view)) {
+      mode={...mode,reviewStepID:action.view==='results'?action.id:undefined};
+      $({results:'review-results',scope:'scope-results',limits:'evidence'}[action.view]).click();
+    }
     else if(action.view==='document')openDocumentation([...(report.documents||[]),...(report.entryPoints?.sources||[])].find(d=>d.id===action.id));
-    else if(action.view==='architecture')go({kind:'system-flow',level:action.id});
+    else if(action.view==='architecture')go({kind:'system-flow',level:action.id,componentID:action.componentID,
+      operationID:action.operationID,group:action.group});
     else if(action.view==='flow') {
       const historyLength=history.length;
       const entry=GoReviewQuery.scene(report,{entryID:action.entryID}).entry;

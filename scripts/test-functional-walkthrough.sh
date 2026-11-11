@@ -1,6 +1,6 @@
 #!/bin/sh
 # Verifies source-linked functional operations with controlled fixtures.
-# Args: sources|system|branches|execution|runtime|api|ui|frontend|build|backend|all;
+# Args: sources|system|branches|execution|runtime|dataflow|api|ui|frontend|build|backend|all;
 # or builder|wasm MODULE_DIR EVIDENCE_DIR for opt-in real-repository acceptance;
 # builder-ui EVIDENCE_DIR reopens it; endpoint-ui SNAPSHOT checks retained entry flows;
 # endpoint-live-ui URL checks the running workbench assets and snapshot in jsdom;
@@ -16,6 +16,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 case "${1:-sources}" in
+  dataflow)
+    go test ./internal/review ./internal/workbench -run '^TestDataFlow' -count=1
+    node --test internal/webui/dataflow_test.js
+    ;;
   workspace)
     node --test internal/webui/workspace_ui_test.js internal/webui/endpoint_flow_test.js internal/webui/repository_ui_test.js
     ;;
@@ -42,7 +46,7 @@ case "${1:-sources}" in
     go test ./internal/webui ./internal/workbench -run '^TestReviewQuery|^TestMCP|^TestAgentNavigation' -count=1
     ;;
   mcp)
-    node --test internal/webui/review_query_test.js internal/webui/visual_review_test.js
+    node --test internal/webui/review_query_test.js internal/webui/parity_query_test.js internal/webui/visual_review_test.js
     go test ./internal/webui ./internal/workbench -run 'TestReviewQuery|TestMCP' -count=1
     ;;
   mcp-build)

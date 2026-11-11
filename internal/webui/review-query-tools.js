@@ -8,6 +8,8 @@
   const assessment=load('assessment','GoReviewAssessment');
   const system=load('system-flow','GoReviewSystemFlow');
   const documentation=load('documentation','GoReviewDocumentation');
+  const reviewMap=load('review','GoReviewMap');
+  const dataFlow=load('dataflow','GoReviewDataFlow');
 
   const maxResultBytes=32768,pageBytes=6144;
   function byteLength(text) {
@@ -149,7 +151,107 @@
     return {...summary,checkCount:checks.length,findingCount:findings.length,packageCount:packages.length};
   }
 
-  function result(report,operation,args) {
+  function result(report,operation,args,repository) {
+    if(operation==='assess') {
+      if(args.package&&!(report.packages||[]).some(p=>p.path===args.package))throw Error('Unknown assessment package');
+      if(args.coverage&&!['all','known','unknown'].includes(args.coverage))throw Error('Unknown coverage filter');
+      if(args.minComplexity!==undefined&&(!Number.isFinite(args.minComplexity)||args.minComplexity<0))throw Error('Invalid minimum complexity');
+      if(args.maxCoverage!==undefined&&(!Number.isFinite(args.maxCoverage)||args.maxCoverage<0||args.maxCoverage>100))throw Error('Invalid maximum coverage');
+      const m=assessment.model(report,args.package),records=reviewMap.reviewRecords(report);
+      const plot=reviewMap.reviewPlot(records.records,args);
+      if(args.symbolID&&!plot.records.some(r=>r.symbol.id===args.symbolID))throw Error('Selected function is outside the filtered Review Map');
+      const rules=m.valid?report.assessment.rules||[]:[];
+      if(args.ruleID) {
+        const rule=rules.find(rule=>rule.id===args.ruleID);
+        if(!rule)throw Error('Unknown retained rule');
+        return textResult(rule,'description',args);
+      }
+      if(args.findingID) {
+        const finding=m.findings.find(f=>f.id===args.findingID);
+        if(!finding)throw Error('Unknown retained finding');
+        return textResult(finding,'evidence',args);
+      }
+      const cohort=args.cohort?plot.groups.find(g=>g.key===args.cohort):null;
+      if(args.cohort&&!cohort)throw Error('Unknown review-map cohort for these filters');
+      if(args.symbolID&&cohort&&!cohort.members.some(r=>r.symbol.id===args.symbolID))throw Error('Selected function is outside the chosen cohort');
+      const recordSummary=r=>({symbol:symbolSummary(r.symbol),complexity:r.complexity,coverage:r.coverage,
+        architecture:assessment.indicators(report,{symbolID:r.symbol.id})});
+      const sections={
+        records:()=>[...(cohort?cohort.members:plot.records)].sort(reviewMap.compareRecords).map(recordSummary),
+        cohorts:()=>plot.groups.map(g=>({key:g.key,count:g.members.length,
+          complexity:g.members[0].complexity,coverage:g.members[0].coverage.value})),
+        rules:()=>rules.map(({description,...r})=>({...r,descriptionLength:description.length})),
+        findings:()=>m.findings,packages:()=>m.packages,
+        checks:()=>m.checks.map(({detail,locations,...c})=>({...c,detailLength:detail?.length||0,locationCount:locations?.length||0}))};
+      if(args.section) {
+        if(!sections[args.section])throw Error('Unknown assessment section');
+        return page(sections[args.section](),args);
+      }
+      return {assessment:assessmentSummary(report,args),filteredFunctionCount:plot.records.length,
+        cohortCount:plot.groups.length,unmeasuredFunctionCount:records.unmeasured,
+        selected:args.symbolID?recordSummary(plot.records.find(r=>r.symbol.id===args.symbolID)):null,
+        records:page(sections.records(),args),sections:Object.keys(sections)};
+    }
+    if(operation==='dataflow') {
+      if(!['function','method','closure'].includes(symbol(report,args.symbolID).kind))throw Error('Value data flow requires a function');
+      if(args.direction&&!['both','upstream','downstream'].includes(args.direction))throw Error('Invalid data-flow direction');
+      if(args.depth!==undefined&&(!Number.isInteger(args.depth)||args.depth<0||args.depth>100))throw Error('Data-flow depth must be 0-100');
+      if(!report.dataFlows) {
+        if(args.valueID)throw Error('No retained value ID in this older review');
+        return {status:'not-collected',reason:'Value data flow was not collected in this older review. Run a new explicit review.'};
+      }
+      if(report.dataFlows.sourceSHA256!==report.sourceSHA256)throw Error('Data-flow evidence does not match snapshot');
+      const found=report.dataFlows.results.find(r=>r.symbolID===args.symbolID);
+      if(args.valueID&&found?.status!=='available')throw Error('Value focus is unavailable without a retained data-flow graph');
+      if(!found)return {status:'unsupported',reason:'No retained function result for this symbol'};
+      if(found.status!=='available')return {status:found.status,reason:found.error};
+      const graph=found.graph;
+      if(!graph||graph.symbolID!==args.symbolID||graph.sourceSHA256!==report.sourceSHA256)throw Error('Invalid retained data-flow graph identity');
+      if(args.valueID&&!graph.nodes.some(n=>n.id===args.valueID))throw Error('Unknown retained value ID');
+      const selected=args.valueID?dataFlow.slice(graph,args.valueID,args.direction||'both',args.depth??Infinity):graph;
+      const sections={nodes:selected.nodes,edges:selected.edges,limitations:graph.limitations||[]};
+      if(args.section) {
+        if(!sections[args.section])throw Error('Unknown data-flow section');
+        return page(sections[args.section],args);
+      }
+      const ns=collection(selected.nodes,args),es=collection(selected.edges,args);
+      return {status:'available',symbolID:graph.symbolID,sourceSHA256:graph.sourceSHA256,
+        collector:graph.collector,toolVersion:graph.toolVersion,generatedAt:graph.generatedAt,
+        totalNodes:graph.nodes.length,totalEdges:graph.edges.length,
+        nodes:ns.values,nodePage:ns.paging,edges:es.values,edgePage:es.paging,
+        limitations:page(graph.limitations||[],args),sections:Object.keys(sections)};
+    }
+    if(operation==='results') {
+      if(!repository)return {status:'not-collected',reason:'No repository-wide run is associated with this snapshot.'};
+      const steps=repository.steps||[],modules=repository.modules||[];
+      if(args.stepID) {
+        const step=steps.find(s=>s.id===args.stepID);
+        if(!step)throw Error('Unknown retained review step');
+        if(args.commandIndex!==undefined) {
+          const command=step.commands?.[args.commandIndex];
+          if(!Number.isInteger(args.commandIndex)||args.commandIndex<0||!command)throw Error('Unknown review-step command');
+          if(['stdout','stderr'].includes(args.section))return textResult({[args.section]:command[args.section]||''},args.section,args);
+          if(args.section)throw Error('Unknown command section');
+          return commandSummary(command,args.commandIndex);
+        }
+        if(args.section==='detail')return textResult({id:step.id,detail:step.detail||''},'detail',args);
+        if(args.section==='commands')return page((step.commands||[]).map(commandSummary),args);
+        if(args.section)throw Error('Unknown step section');
+        return {id:step.id,title:step.title,status:step.status,module:step.module,detailLength:step.detail?.length||0,
+          commandCount:step.commands?.length||0,sections:['detail','commands']};
+      }
+      if(args.commandIndex!==undefined)throw Error('Select stepID for a repository command');
+      const sections={modules:()=>modules,steps:()=>steps.map(({commands,detail,inputs,...s})=>({...s,detailLength:detail?.length||0,commandCount:commands?.length||0})),
+        exclusions:()=>repository.exclusions||[],excludedPaths:()=>repository.scope?.excludePaths||[],
+        excludedTests:()=>repository.scope?.excludeTests||[],unitSelections:()=>repository.scope?.unitSelections||[]};
+      if(args.section) {
+        if(!sections[args.section])throw Error('Unknown repository results section');
+        return page(sections[args.section](),args);
+      }
+      return {root:repository.root,directory:repository.directory,status:repository.status,finishedAt:repository.finishedAt,
+        moduleCount:modules.length,stepCount:steps.length,scope:scopeSummary(repository.scope),
+        modules:page(modules,args),steps:page(sections.steps(),args),sections:Object.keys(sections)};
+    }
     if(operation==='overview') {
       const purposeDocument=documentation.overviewDocument(report);
       const entries=application.entryInventory(report,{query:args.query});
@@ -414,6 +516,11 @@
       const s=args.symbolID?symbol(report,args.symbolID):null;
       const runs=report.unitEvidence;
       const cfg=s?(report.controlFlows||[]).find(f=>f.symbolID===s.id):null;
+      if(args.functionView) {
+        if(!['logical','control','calls'].includes(args.functionView))throw Error('Unknown function view');
+        if(!s||!['function','method','closure'].includes(s.kind))throw Error('Function view requires a callable symbol');
+        if(args.functionView==='control'&&!cfg)throw Error('Control flow was not retained for this function');
+      }
       const sections={
         calls:()=>(report.calls||[]).filter(c=>s&&(c.from===s.id||c.to===s.id)),
         references:()=>(report.references||[]).filter(r=>s&&(r.to===s.id||r.from===s.id)),
@@ -458,8 +565,8 @@
     }
     throw Error('Unknown review query: '+operation);
   }
-  function query(report,operation,args={}) {
-    const value=result(report,operation,args),size=byteLength(JSON.stringify(value));
+  function query(report,operation,args={},repository=null) {
+    const value=result(report,operation,args,repository),size=byteLength(JSON.stringify(value));
     if(size>maxResultBytes)throw Error('Review '+operation+' result exceeds 32 KiB ('+size+
       ' bytes). Request a single section and a smaller limit, or use textOffset/textLimit for text. No evidence was truncated.');
     return value;

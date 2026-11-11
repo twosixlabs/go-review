@@ -46,7 +46,7 @@ case "$selector" in
     go test ./internal/review ./internal/workbench ./cmd/go-review -run '^TestAgentWorkflow|^TestAgentCLI' -count=1
     ;;
   ui)
-    node --test internal/webui/agents_ui_test.js
+    node --test internal/webui/agents_ui_test.js internal/webui/parity_navigation_test.js
     ;;
   all)
     mkdir -p .work

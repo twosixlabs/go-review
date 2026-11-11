@@ -29,6 +29,7 @@ type Report struct {
 	Symbols           []Symbol             `json:"symbols"`
 	Calls             []Call               `json:"calls"`
 	ControlFlows      []ControlFlow        `json:"controlFlows"`
+	DataFlows         *DataFlowEvidence    `json:"dataFlows,omitempty"`
 	References        []Reference          `json:"references"`
 	HTTPEndpoints     []HTTPEndpoint       `json:"httpEndpoints"`
 	EntryPoints       *EntryPointInventory `json:"entryPoints,omitempty"`

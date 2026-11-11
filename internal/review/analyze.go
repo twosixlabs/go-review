@@ -87,7 +87,7 @@ func Analyze(ctx context.Context, opts Options) (*Report, error) {
 		Documents: []Document{}, TestSources: []TestSource{}, Inputs: []Input{}, Warnings: []string{}, HTTPEndpoints: []HTTPEndpoint{},
 		Limitations: []string{
 			"AI is disabled; all evidence is local static analysis or explicitly requested Go test output.",
-			"Intraprocedural SSA operand flow is available on demand. Interprocedural propagation, pointer alias analysis and runtime argument/return values are unavailable. Runtime evidence exists only when explicitly recorded.",
+			"Intraprocedural SSA operand flow is retained during initial analysis, with explicit unavailable outcomes. Interprocedural propagation, pointer alias analysis and runtime argument/return values are unavailable. Runtime evidence exists only when explicitly recorded.",
 			"Calls are syntax/type-resolved, not a whole-program call graph. Interface dispatch and function values remain indirect. No reachability or dead-code claims.",
 			"HTTP inventory recognizes type-verified net/http Handle and HandleFunc registration sites only. Startup reachability, mounted prefixes, middleware behavior, indirect registrations and other routers are not resolved. Dynamic patterns and handlers remain explicit.",
 			"Cyclomatic = 1 + if/for/range + nondefault case/communication clauses + &&/||; function literals are measured separately. This is not cognitive complexity.",
@@ -276,6 +276,9 @@ func Analyze(ctx context.Context, opts Options) (*Report, error) {
 		return nil, err
 	}
 	a.finalize()
+	if err = a.collectDataFlows(ctx, paths); err != nil {
+		return nil, err
+	}
 	r.Assessment = Assess(r)
 	if opts.CoverageProfile != "" {
 		f, e := os.Open(opts.CoverageProfile)
@@ -373,7 +376,8 @@ func (a *analyzer) Import(path string) (*types.Package, error) {
 	}
 	p.busy = true
 	defer func() { p.busy = false }()
-	p.info = &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}, Instances: map[*ast.Ident]types.Instance{}}
+	p.info = &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}, Instances: map[*ast.Ident]types.Instance{},
+		Implicits: map[ast.Node]types.Object{}, Scopes: map[ast.Node]*types.Scope{}, FileVersions: map[*ast.File]string{}}
 	pack := Package{ID: stableID("pkg", path), Path: path, Name: p.meta.Name, Imports: append([]string{}, p.meta.Imports...), FileIDs: []string{}, TypeErrors: []string{}}
 	sort.Strings(pack.Imports)
 	for _, f := range p.ast {

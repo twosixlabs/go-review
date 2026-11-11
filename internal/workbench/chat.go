@@ -26,6 +26,18 @@ type navigation struct {
 	To            string   `json:"to,omitempty"`
 	Kind          string   `json:"kind,omitempty"`
 	Label         string   `json:"label,omitempty"`
+	Package       string   `json:"package,omitempty"`
+	Query         string   `json:"query,omitempty"`
+	MinComplexity *float64 `json:"minComplexity,omitempty"`
+	MaxCoverage   *float64 `json:"maxCoverage,omitempty"`
+	Coverage      string   `json:"coverage,omitempty"`
+	Cohort        string   `json:"cohort,omitempty"`
+	ValueID       string   `json:"valueID,omitempty"`
+	Direction     string   `json:"direction,omitempty"`
+	Depth         *int     `json:"depth,omitempty"`
+	ComponentID   string   `json:"componentID,omitempty"`
+	OperationID   string   `json:"operationID,omitempty"`
+	Group         string   `json:"group,omitempty"`
 }
 type navigationEvent struct {
 	navigation
@@ -93,9 +105,12 @@ func validateNavigation(ctx context.Context, snapshot *querySnapshot, n navigati
 	case "document":
 		operation = "document"
 		args["id"] = n.ID
-	case "symbol":
+	case "symbol", "logical", "control", "calls":
 		operation = "evidence"
 		args["symbolID"] = n.ID
+		if n.View != "symbol" {
+			args["functionView"] = n.View
+		}
 		if n.ID == "" {
 			return event, fmt.Errorf("symbol id is required")
 		}
@@ -108,6 +123,39 @@ func validateNavigation(ctx context.Context, snapshot *querySnapshot, n navigati
 	case "architecture":
 		operation = "architecture"
 		args["level"] = n.ID
+		args["componentID"] = n.ComponentID
+		args["operationID"] = n.OperationID
+		args["group"] = n.Group
+	case "review-map":
+		operation = "assess"
+		args = map[string]any{"package": n.Package, "query": n.Query, "coverage": n.Coverage, "cohort": n.Cohort, "symbolID": n.ID}
+		if n.MinComplexity != nil {
+			args["minComplexity"] = *n.MinComplexity
+		}
+		if n.MaxCoverage != nil {
+			args["maxCoverage"] = *n.MaxCoverage
+		}
+	case "signals":
+		operation = "assess"
+		args = map[string]any{"package": n.Package, "findingID": n.ID}
+	case "hygiene":
+		operation = "evidence"
+		if n.ID != "" {
+			args["checkID"] = n.ID
+		}
+	case "results":
+		operation = "results"
+		if n.ID != "" {
+			args["stepID"] = n.ID
+		}
+	case "scope", "limits":
+		operation = "evidence"
+	case "dataflow":
+		operation = "dataflow"
+		args = map[string]any{"symbolID": n.ID, "valueID": n.ValueID, "direction": n.Direction}
+		if n.Depth != nil {
+			args["depth"] = *n.Depth
+		}
 	case "flow":
 		operation = "flow"
 		args = map[string]any{"entryID": n.EntryID, "focusSymbolID": n.FocusSymbolID, "focusPath": n.FocusPath, "expandedIDs": n.ExpandedIDs}
@@ -127,9 +175,20 @@ func validateNavigation(ctx context.Context, snapshot *querySnapshot, n navigati
 	if err != nil {
 		return event, err
 	}
-	_, err = snapshot.query.Query(ctx, operation, data)
+	result, err := snapshot.query.Query(ctx, operation, data)
 	if err != nil {
 		return event, fmt.Errorf("invalid navigation: %w", err)
+	}
+	if n.View == "results" {
+		var state struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(result, &state); err != nil {
+			return event, err
+		}
+		if state.Status == "not-collected" {
+			return event, fmt.Errorf("repository results are unavailable for this snapshot")
+		}
 	}
 	return event, nil
 }
@@ -156,6 +215,9 @@ CHOOSING EVIDENCE
 - review_packages: compact package counts and gauges. Select a package and an explicit section for symbols, imports, files or documentation. For a module-wide maximum, use review_overview.metrics.complexity.maximumSymbolIDs, then verify the owner with review_evidence. Do not scan packages or fetch a whole symbol inventory to rediscover a known maximum.
 - review_search: literal text search, not regex or semantic search. Search a distinctive name or term. Qualified display names may not match the searchable fields; if a qualified query misses, try the method name and disambiguate its package/signature. Use returned IDs, not guessed names as IDs.
 - review_evidence(symbolID): the function's own metrics and retained check/test evidence. review_source: bounded source ranges for implementation or assertions. review_document: complete documentation. review_architecture: broader responsibility/exchange context when relevant, not a mandatory extra step.
+- review_assess: the same Review Map records, priority ordering, cohorts and filters as the UI. Missing coverage is unknown, never zero. Select findingID for its evidence or ruleID for the complete heuristic description. Signals are investigation leads, not verdicts.
+- review_dataflow: retained initial-review SSA definitions, uses and opaque boundaries. Select symbolID, then valueID/direction/depth to reproduce the UI slice. It never runs analysis. Older reviews explicitly report not-collected; unsupported functions have recorded reasons. An operand edge is not runtime chronology, alias lineage or cross-function value propagation.
+- review_results: associated repository-wide modules, failures, skipped stages and scope. Select stepID for detail/commands, then commandIndex and stdout/stderr for paged logs. review_evidence retains module-local checks, coverage, scope, exclusions and limitations; checkID reveals full diagnostics. Neither tool executes checks, tests or a new review.
 - Discovery returns counts and bounded previews, not full membership, CFGs or logs. Select a returned sections value only when that detail is needed. Keep requests small, normally 5-10 items. Byte limits can return fewer items: follow nextOffset, never the requested limit. Text pages use textOffset/textLimit and textPage.nextOffset. Never page beyond a null cursor. Do not repeat an unchanged query that already failed to help. After two unproductive searches, change evidence source or report the gap rather than cycling through spelling variations.
 - Prefer a few purposeful calls over exhaustive browsing. Tool errors are evidence about the query, not the project: correct the arguments or explain the limitation.
 
@@ -166,6 +228,7 @@ Treat documentation claims, measured facts, inferences and your judgments as dif
 
 VISUAL COLLABORATION
 Use the diagram as shared context: connect details back to their enclosing responsibility and flow. When the user asks to show, expand, focus, select or return, use navigate_ui with real retained IDs and the full relevant context.
+Destinations also include review-map (filters/cohort and optional selected function ID), signals (finding ID), hygiene (check ID), results (review stage ID), scope, limits, logical/control/calls (function ID), dataflow (function ID and optional valueID/direction/depth), and architecture (level plus componentID/operationID/group). Evidence readers open in the normal wide panel. Navigation selects retained evidence only; it cannot start collection.
 Expansion reveals children IN PLACE: use occurrence IDs in expandedIDs and preserve existing expansions. Focus opens a deeper view: use focusSymbolID and retain focusPath. Selection uses a visible occurrence nodeID. Retrieve the scene/inspect evidence if you do not know the right occurrence or whether it has children.
 Without navigation permission, a destination becomes a Show in diagram proposal, not automatic movement. A dispatched action is not proof the browser moved; only subsequent UI context confirms that. Never substitute narration for an action.
 For ordinary questions, leave the view alone: do not call navigate_ui and do not announce non-navigation. When the user requests movement, retrieve and dispatch the correct destination. Suggested destinations without permission remain clickable proposals. No navigation decision is required to answer a question.
@@ -180,8 +243,8 @@ Use native function calls, not printed XML/tool-request markup. Evidence must be
 var navigateSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "view":{"type":"string","enum":["application","packages","package","document","symbol","architecture","flow","back"],"description":"Use flow to open an entry, expand nodes in place or focus deeper. Use back to return. Call only for requested navigation or a useful destination proposal; ordinary answers need no call."},
-    "id":{"type":"string","description":"Document, symbol or package ID; architecture uses context or components"},
+    "view":{"type":"string","enum":["application","packages","package","document","symbol","logical","control","calls","dataflow","architecture","flow","review-map","signals","hygiene","results","scope","limits","back"],"description":"Explore: application/packages/architecture/flow or function logical/control/calls/dataflow. Assess: review-map/signals/hygiene. Evidence: document/results/scope/limits. Call only for requested navigation or a useful proposal; ordinary answers need no call."},
+    "id":{"type":"string","description":"Document, function symbol or package ID; architecture uses context/components. signals selects finding ID, hygiene selects check ID, results selects step ID; omit to open whole view. review-map optionally selects a function."},
     "module":{"type":"string","description":"Exact retained module name when navigating outside the initial module. Omit for current conversation module."},
     "entryID":{"type":"string","description":"Required for flow: retained Wasm export, CLI main, public library API, HTTP or supporting initialization entry ID"},
     "focusSymbolID":{"type":"string","description":"Opens a SEPARATE focused operation view. Omit for expand-in-place; focusing is not expansion."},
@@ -191,7 +254,19 @@ var navigateSchema = json.RawMessage(`{
     "from":{"type":"string","description":"Visible source node ID when selecting an edge"},
     "to":{"type":"string","description":"Visible destination node ID when selecting an edge"},
     "kind":{"type":"string","description":"Edge kind: control or asynchronous"},
-    "label":{"type":"string","description":"Short human label describing destination"}
+    "label":{"type":"string","description":"Short human label describing destination"},
+    "package":{"type":"string","description":"Package filter for Review Map or Architecture signals"},
+    "query":{"type":"string","description":"Review Map function name filter"},
+    "minComplexity":{"type":"number","minimum":0},
+    "maxCoverage":{"type":"number","minimum":0,"maximum":100},
+    "coverage":{"type":"string","enum":["all","known","unknown"]},
+    "cohort":{"type":"string","description":"Review Map cohort key from review_assess"},
+    "valueID":{"type":"string","description":"SSA node ID from review_dataflow"},
+    "direction":{"type":"string","enum":["both","upstream","downstream"]},
+    "depth":{"type":"integer","minimum":0,"maximum":100},
+    "componentID":{"type":"string"},
+    "operationID":{"type":"string"},
+    "group":{"type":"string"}
   },
   "required":["view"],"additionalProperties":false
 }`)
@@ -304,23 +379,9 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	// Text-only browser history intentionally contains no trusted tool results.
 	// Refresh the actual visible context through MCP every turn, so an earlier
 	// model claim cannot stand in for retained evidence or occurrence IDs.
-	refreshName := "review_overview"
-	refreshArgs := map[string]any{"module": snapshot.info.Module, "limit": 3}
-	var current struct {
-		EntryID       string   `json:"entryID"`
-		FocusSymbolID string   `json:"focusSymbolID"`
-		FocusPath     []string `json:"focusPath"`
-		ExpandedIDs   []string `json:"expandedIDs"`
-	}
-	if len(request.Context) > 0 {
-		if err := json.Unmarshal(request.Context, &current); err != nil {
-			return fmt.Errorf("invalid UI context: %w", err)
-		}
-	}
-	if current.EntryID != "" {
-		refreshName = "review_flow"
-		refreshArgs = map[string]any{"snapshotID": snapshot.info.ID, "entryID": current.EntryID,
-			"focusSymbolID": current.FocusSymbolID, "focusPath": current.FocusPath, "expandedIDs": current.ExpandedIDs}
+	refreshName, refreshArgs, err := chatRefresh(snapshot.info, request.Context)
+	if err != nil {
+		return err
 	}
 	if err := emit(chatEvent{Type: "tool", Tool: refreshName, Args: refreshArgs}); err != nil {
 		return err

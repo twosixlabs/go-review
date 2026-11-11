@@ -16,7 +16,10 @@
     const maxComplexity=Math.max(5,...records.map(r=>r.complexity));
     const query=(filter.query||'').trim().toLowerCase();
     const matches=records.filter(r=>(!filter.package||r.symbol.package===filter.package)&&
-      (!query||(r.symbol.name+' '+r.symbol.qualified).toLowerCase().includes(query)));
+      (!query||(r.symbol.name+' '+r.symbol.qualified).toLowerCase().includes(query))&&
+      (filter.minComplexity===undefined||r.complexity>=filter.minComplexity)&&
+      (filter.maxCoverage===undefined||r.coverage.value!==null&&r.coverage.value<=filter.maxCoverage)&&
+      (!filter.coverage||filter.coverage==='all'||(filter.coverage==='unknown'?r.coverage.value===null:r.coverage.value!==null)));
     const groups=new Map();
     for(const record of matches) {
       const {complexity,coverage}=record,key=complexity+':'+(coverage.value===null?'unknown':coverage.value);
@@ -29,6 +32,8 @@
     }
     return {records:matches,groups:[...groups.values()],maxComplexity};
   }
-  const api={reviewRecords,reviewPlot};
+  const compareRecords=(a,b)=>b.complexity-a.complexity||
+    (a.coverage.value??101)-(b.coverage.value??101)||(a.symbol.qualified||a.symbol.name).localeCompare(b.symbol.qualified||b.symbol.name);
+  const api={reviewRecords,reviewPlot,compareRecords};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.GoReviewMap=api;
 })(typeof globalThis==='undefined'?this:globalThis);

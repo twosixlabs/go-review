@@ -24,6 +24,8 @@ func TestDataFlowAPIRequiresMatchingSnapshot(t *testing.T) {
 	if id == "" {
 		t.Fatal("fixture function missing")
 	}
+	report.Root = "/unavailable/retained-checkout"
+	commandCount := len(report.Commands)
 	h := New(report).Handler()
 	for _, tc := range []struct {
 		body string
@@ -58,5 +60,16 @@ func TestDataFlowAPIRequiresMatchingSnapshot(t *testing.T) {
 	}
 	if report.Trace != nil {
 		t.Fatal("data-flow analysis executed tests")
+	}
+	if len(report.Commands) != commandCount {
+		t.Fatal("retained graph read ran Go tooling")
+	}
+	report.DataFlows = nil
+	r := httptest.NewRequest("POST", "http://127.0.0.1:8090/api/dataflow", strings.NewReader(`{"symbolID":"`+id+`","sourceSHA256":"`+report.SourceSHA256+`"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "not collected") {
+		t.Fatalf("legacy absence was not explicit: %d %s", w.Code, w.Body.String())
 	}
 }

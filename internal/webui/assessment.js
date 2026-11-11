@@ -111,7 +111,7 @@ render=function() {
   for(const p of GoReviewAssessment.model(report).packages)
     button(GoReviewAssessment.labels[p.level]+' · '+short(p.package),()=>go({kind:'signals',package:p.package}),$('list'));
   GoReviewAssessment.render($('application-overview'),report,{
-    package:mode.package,onPackage:path=>go({kind:'signals',package:path}),
+    package:mode.package,checkID:mode.checkID,onPackage:path=>go({kind:'signals',package:path}),
     renderMetrics:(parent,context)=>signalSummary(parent,context,false),
     onFinding:finding=>{mode={...mode,id:finding.id};showSignalFinding(finding);},
     onLocation:location=>{detail('Hygiene evidence');source(location);}

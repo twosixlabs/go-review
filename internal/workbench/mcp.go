@@ -88,6 +88,7 @@ type packageInput struct {
 type evidenceInput struct {
 	snapshotInput
 	SymbolID     string  `json:"symbolID,omitempty" jsonschema:"Symbol ID for function metrics and counts. Use section controlFlowNodes, controlFlowEdges, calls, references, comments, documentation for details"`
+	FunctionView string  `json:"functionView,omitempty" jsonschema:"Optional logical, control, or calls view; validates callable membership and retained control-flow availability"`
 	RunIndex     *int    `json:"runIndex,omitempty" jsonschema:"Optional zero-based test run index for paginated matched tests/outcomes and retained standard runtime observations"`
 	CheckID      *string `json:"checkID,omitempty" jsonschema:"Retained check ID for diagnostic text (textPage for large text); section locations pages locations"`
 	CommandIndex *int    `json:"commandIndex,omitempty" jsonschema:"Zero-based command index for command summary; section stdout or stderr reads paged log text. With runIndex selects that run's command"`
@@ -108,6 +109,36 @@ type architectureInput struct {
 	pageInput
 }
 
+type assessInput struct {
+	snapshotInput
+	Package       string   `json:"package,omitempty" jsonschema:"Exact package import path filter"`
+	Query         string   `json:"query,omitempty" jsonschema:"Function name filter, same as Review Map"`
+	MinComplexity *float64 `json:"minComplexity,omitempty" jsonschema:"Minimum raw cyclomatic complexity"`
+	MaxCoverage   *float64 `json:"maxCoverage,omitempty" jsonschema:"Maximum statement coverage 0-100; unknown coverage is excluded, not treated as zero"`
+	Coverage      string   `json:"coverage,omitempty" jsonschema:"all (default), known, or unknown"`
+	Cohort        string   `json:"cohort,omitempty" jsonschema:"Returned Review Map cohort key"`
+	FindingID     string   `json:"findingID,omitempty" jsonschema:"Retained finding ID for complete evidence text"`
+	RuleID        string   `json:"ruleID,omitempty" jsonschema:"Retained rule ID for complete description"`
+	SymbolID      string   `json:"symbolID,omitempty" jsonschema:"Selected Review Map function; validates that it belongs to current filters"`
+	pageInput
+}
+
+type dataFlowInput struct {
+	snapshotInput
+	SymbolID  string `json:"symbolID" jsonschema:"Retained function symbol ID"`
+	ValueID   string `json:"valueID,omitempty" jsonschema:"Retained SSA node ID to slice; omit for whole function"`
+	Direction string `json:"direction,omitempty" jsonschema:"both (default), upstream or downstream"`
+	Depth     *int   `json:"depth,omitempty" jsonschema:"0-100 operand hops; omit for all reachable values"`
+	pageInput
+}
+
+type resultsInput struct {
+	snapshotInput
+	StepID       string `json:"stepID,omitempty" jsonschema:"Retained repository step ID, from section steps"`
+	CommandIndex *int   `json:"commandIndex,omitempty" jsonschema:"Command index within step; sections stdout/stderr read complete paged logs"`
+	pageInput
+}
+
 type snapshotInfo struct {
 	ID           string    `json:"id"`
 	Module       string    `json:"module"`
@@ -116,9 +147,11 @@ type snapshotInfo struct {
 }
 
 type querySnapshot struct {
-	info   snapshotInfo
-	report *review.Report
-	query  *webui.ReviewQuery
+	info       snapshotInfo
+	report     *review.Report
+	query      *webui.ReviewQuery
+	run        *review.RepositoryReview
+	repository json.RawMessage
 }
 
 type reviewMCP struct {
@@ -149,6 +182,9 @@ func (service *reviewMCP) server() *mcp.Server {
 	registerReviewTool(server, service, "review_packages", "Compact package counts and scoped gauges, not membership dumps. Select package and section for paged symbols, imports, files, typeErrors, documentation or maximumOwners.", "packages", func(a packageInput) (string, string) { return a.SnapshotID, "" })
 	registerReviewTool(server, service, "review_evidence", "Retained check/test outcomes, coverage provenance, scope and exclusions; optionally function CFG, calls, references and metrics. Does not execute tests.", "evidence", func(a evidenceInput) (string, string) { return a.SnapshotID, "" })
 	registerReviewTool(server, service, "review_architecture", "Compact shared UI architecture topology. Select sections to page nodes, edges, components, operations, exchanges, alternatives, members or sources; hidden detail is not inlined.", "architecture", func(a architectureInput) (string, string) { return a.SnapshotID, "" })
+	registerReviewTool(server, service, "review_assess", "Shared Review Map records/cohorts and architecture signals. Sections records, cohorts, findings, packages, rules, checks. Sorts functions by complexity descending, coverage ascending; unknown coverage stays unknown. Select ruleID or findingID for full text.", "assess", func(a assessInput) (string, string) { return a.SnapshotID, "" })
+	registerReviewTool(server, service, "review_dataflow", "Read SSA value graphs retained during initial review; never runs analysis or target code. Sections nodes, edges, limitations; valueID/direction/depth use the UI operand slice. Legacy absence and unsupported/error outcomes are explicit.", "dataflow", func(a dataFlowInput) (string, string) { return a.SnapshotID, "" })
+	registerReviewTool(server, service, "review_results", "Read repository-wide review outcome associated with this snapshot, including unavailable modules, failed/skipped stages, scope and logs. Sections modules, steps, exclusions, excludedPaths, excludedTests, unitSelections. Select stepID for detail/commands, then commandIndex for stdout/stderr. Never starts review.", "results", func(a resultsInput) (string, string) { return a.SnapshotID, "" })
 	return server
 }
 
@@ -227,9 +263,10 @@ func boolPointer(value bool) *bool { return &value }
 func (service *reviewMCP) snapshot(id, module string) (*querySnapshot, []snapshotInfo, error) {
 	service.work.mu.RLock()
 	selected := service.work.report
+	run := service.work.review
 	reports := []*review.Report{}
-	if service.work.review != nil {
-		for _, m := range service.work.review.Modules {
+	if run != nil {
+		for _, m := range run.Modules {
 			if m.Report != nil {
 				reports = append(reports, m.Report)
 			}
@@ -255,16 +292,32 @@ func (service *reviewMCP) snapshot(id, module string) (*querySnapshot, []snapsho
 	var result *querySnapshot
 	for _, report := range reports {
 		current[report] = true
+		var associated *review.RepositoryReview
+		if run != nil {
+			for _, m := range run.Modules {
+				if m.Report == report {
+					associated = run
+					break
+				}
+			}
+		}
 		snapshot := service.cache[report]
-		if snapshot == nil {
+		if snapshot == nil || snapshot.run != associated {
 			data, err := json.Marshal(report)
 			if err != nil {
 				return nil, nil, fmt.Errorf("hash retained snapshot: %w", err)
 			}
-			digest := sha256.Sum256(data)
+			repository, err := json.Marshal(summarizeRun(associated))
+			if err != nil {
+				return nil, nil, fmt.Errorf("encode retained repository evidence: %w", err)
+			}
+			// A run replacement invalidates its evidence handles even if module
+			// source is unchanged. Query runtimes own a frozen run summary.
+			identity := append(append([]byte{}, data...), repository...)
+			digest := sha256.Sum256(identity)
 			snapshot = &querySnapshot{report: report, info: snapshotInfo{
 				ID: hex.EncodeToString(digest[:]), Module: report.Module,
-				SourceSHA256: report.SourceSHA256, GeneratedAt: report.GeneratedAt}}
+				SourceSHA256: report.SourceSHA256, GeneratedAt: report.GeneratedAt}, run: associated, repository: repository}
 			service.cache[report] = snapshot
 		}
 		catalog = append(catalog, snapshot.info)
@@ -282,7 +335,7 @@ func (service *reviewMCP) snapshot(id, module string) (*querySnapshot, []snapsho
 		return nil, nil, fmt.Errorf("unknown or stale snapshot/module; call review_overview to select retained evidence")
 	}
 	if result.query == nil {
-		query, err := webui.NewReviewQuery(result.report)
+		query, err := webui.NewReviewQuery(result.report, result.repository)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -17,17 +17,18 @@ import (
 func TestMCPProgressiveDisclosureSchemas(t *testing.T) {
 	text := strings.Repeat("Complete Unicode rationale λ 🧭\n", 2000)
 	r := &review.Report{Module: "sample",
-		Symbols: []review.Symbol{{ID: "f", Package: "sample", Name: "Work", Cyclomatic: 43,
+		Symbols: []review.Symbol{{ID: "f", Package: "sample", Name: "Work", Kind: "function", Cyclomatic: 43,
 			Location: review.Location{FileID: "file", Line: 2}, Comments: []review.Comment{{Text: text}}}},
 		Packages:  []review.Package{{Path: "sample", Imports: []string{"fmt", "strings"}}},
 		Documents: []review.Document{{ID: "doc", Text: text}},
 		Commands:  []review.Command{{Executable: "go", Stdout: text}}}
 	work := New(r)
-	work.review = &review.RepositoryReview{}
+	work.review = &review.RepositoryReview{Status: "complete", Steps: []review.ReviewStep{{ID: "step", Status: "not-run", Title: "Verification", Detail: "Not authorized"}}}
 	for i := range 50 {
 		work.review.Modules = append(work.review.Modules, review.ReviewedModule{
 			Report: &review.Report{Module: fmt.Sprintf("module-%d", i)}})
 	}
+	work.review.Modules = append(work.review.Modules, review.ReviewedModule{Report: r})
 	server := work.newChatService().server()
 	ct, st := mcp.NewInMemoryTransports()
 	ctx := context.Background()
@@ -91,6 +92,9 @@ func TestMCPProgressiveDisclosureSchemas(t *testing.T) {
 		{"review_packages", map[string]any{"package": "sample", "section": "imports", "offset": 1}},
 		{"review_evidence", map[string]any{"symbolID": "f", "section": "comments", "commentIndex": 0, "textLimit": 20}},
 		{"review_evidence", map[string]any{"commandIndex": 0, "section": "stdout", "textLimit": 20}},
+		{"review_assess", map[string]any{"section": "records", "minComplexity": 40}},
+		{"review_dataflow", map[string]any{"symbolID": "f"}},
+		{"review_results", map[string]any{"stepID": "step", "section": "detail"}},
 	} {
 		tc.args["snapshotID"] = id
 		call(tc.name, tc.args)
@@ -114,8 +118,8 @@ func TestMCPReadOnlyRetainedExploration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 9 {
-		t.Fatalf("tools=%d, want 9", len(tools.Tools))
+	if len(tools.Tools) != 12 {
+		t.Fatalf("tools=%d, want 12", len(tools.Tools))
 	}
 	for _, tool := range tools.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {

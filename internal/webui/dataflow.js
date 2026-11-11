@@ -7,16 +7,19 @@ function dataEntry(snapshot,id) {
   if(!entries.has(id))entries.set(id,{state:'new'});
   return entries.get(id);
 }
-async function loadDataFlow(snapshot,id,entry) {
+function loadDataFlow(snapshot,id,entry) {
   entry.state='loading';
   try {
-    const response=await fetch('/api/dataflow',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbolID:id,sourceSHA256:snapshot.sourceSHA256})});
-    const graph=await response.json();
-    if(!response.ok)throw Error(graph.error||response.statusText);
+    if(!snapshot.dataFlows)throw Error('Value data flow was not collected in this older review. Run a new explicit review to collect it.');
+    if(snapshot.dataFlows.sourceSHA256!==snapshot.sourceSHA256)throw Error('Retained data-flow evidence does not match the source snapshot.');
+    const result=snapshot.dataFlows.results.find(result=>result.symbolID===id);
+    if(!result)throw Error('No retained value data flow for this symbol.');
+    if(result.status!=='available')throw Error(result.status+': '+result.error);
+    const graph=result.graph;
+    if(!graph)throw Error('Retained data-flow graph is missing.');
     if(graph.symbolID!==id||graph.sourceSHA256!==snapshot.sourceSHA256)throw Error('Data-flow evidence does not match the selected source snapshot.');
-    entry.graph=graph;entry.state='ready';
+    entry.graph={...graph,commands:snapshot.dataFlows.commands};entry.state='ready';
   }catch(error){entry.state='error';entry.error=error.message;}
-  if(report===snapshot&&mode.kind==='dataflow'&&mode.id===id)render();
 }
 function dataComments(s,node) {
   if(!node.location)return [];
@@ -36,9 +39,8 @@ function renderDataFlow() {
   const entry=dataEntry(report,s.id);
   if(entry.state==='new'){loadDataFlow(report,s.id,entry);}
   if(entry.state!=='ready') {
-    detail(entry.state==='error'?'Data flow unavailable':'Collecting value data flow',
-      entry.state==='error'?entry.error:'Building source-linked SSA using the local Go analysis toolchain. Target tests are not executed.');
-    if(entry.state==='error')button('Retry data-flow analysis',()=>{entry.state='new';render();},$('detail'));
+    detail(entry.state==='error'?'Data flow unavailable':'Reading retained value data flow',
+      entry.state==='error'?entry.error:'Reading SSA collected during the initial review. No target code or analysis is executed.');
     unitEvidence(s);
     return;
   }

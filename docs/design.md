@@ -284,13 +284,26 @@ first member. Missing member evidence stays explicit. Expansion and selection
 survive Back navigation; each compact/expanded diagram has its own retained
 layout. These blocks are neither atomic execution units nor SSA value groups.
 
-Value exploration is a separate, on-demand SSA view built with
+Value exploration is a separate retained SSA view built with
 `golang.org/x/tools/go/ssa`. Direct definition/use edges connect parameters,
 constants, operations, branch merges, calls and return instructions within one
 function. Initial exploration shows only the selected value's neighborhood;
 engineers can expand upstream/downstream without starting with an entire
 module's value graph. Source, nearby comments and exact collection provenance
-remain accessible. Collection errors and snapshot changes are visible.
+remain accessible. Initial review builds SSA once per package from its existing
+parsed/type-checked source and persists each function's graph or explicit
+unavailable outcome. Command provenance is shared by the collection, not
+duplicated in every function graph. UI, HTTP and MCP read this immutable evidence
+without Go tooling or checkout access. Legacy reports explicitly require a new
+review to obtain SSA; navigation never triggers collection.
+
+MCP and chat reuse the UI's Review Map filters/cohorts and value-slice projection.
+Assessment queries expose full rule descriptions and selected findings; retained
+repository results expose module failures, skipped stages and paged diagnostics.
+Snapshot identity includes the associated run summary, preventing old stage IDs
+from silently referring to a replacement run. Chat refreshes the active view's
+evidence and validates Assess/Evidence/function destinations before using normal
+UI navigation and wide readers. None of these read capabilities grants execution.
 
 SSA operands do not establish memory lineage or executable paths. Calls,
 loads/stores and other memory operations are marked opaque boundaries; this

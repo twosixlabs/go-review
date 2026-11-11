@@ -18,11 +18,11 @@ type ReviewQuery struct {
 	call goja.Callable
 }
 
-func NewReviewQuery(report *review.Report) (*ReviewQuery, error) {
+func NewReviewQuery(report *review.Report, repository ...json.RawMessage) (*ReviewQuery, error) {
 	vm := goja.New()
 	for _, name := range []string{"graph-tools.js", "assessment-tools.js", "application-tools.js",
 		"endpoint-flow-tools.js", "visual-review-tools.js", "system-flow-tools.js",
-		"logical-tools.js", "documentation-tools.js", "review-query-tools.js"} {
+		"logical-tools.js", "documentation-tools.js", "review-tools.js", "dataflow-tools.js", "review-query-tools.js"} {
 		data, err := assets.ReadFile(name)
 		if err != nil {
 			return nil, fmt.Errorf("load shared projection %s: %w", name, err)
@@ -38,11 +38,20 @@ func NewReviewQuery(report *review.Report) (*ReviewQuery, error) {
 	if err := vm.Set("snapshotJSON", string(data)); err != nil {
 		return nil, err
 	}
+	run := "null"
+	if len(repository) > 0 {
+		run = string(repository[0])
+	}
+	if err := vm.Set("repositoryJSON", run); err != nil {
+		return nil, err
+	}
 	value, err := vm.RunString(`(function() {
 		const report=JSON.parse(snapshotJSON);
+		const repository=JSON.parse(repositoryJSON);
 		delete globalThis.snapshotJSON;
+		delete globalThis.repositoryJSON;
 		return function(operation, args) {
-			return JSON.stringify(GoReviewQuery.query(report,operation,JSON.parse(args)));
+			return JSON.stringify(GoReviewQuery.query(report,operation,JSON.parse(args),repository));
 		};
 	})()`)
 	if err != nil {
