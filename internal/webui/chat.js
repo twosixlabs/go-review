@@ -1,5 +1,5 @@
 'use strict';
-const chatState={snapshot:null,records:[],controller:null,report:null,status:null};
+const chatState={snapshot:null,records:[],controller:null,report:null,status:null,sending:false};
 
 function chatNotice(text,error=false) {
   $('chat-status').textContent=text;$('chat-status').classList.toggle('error',error);
@@ -14,15 +14,16 @@ function chatContext() {
 function chatFingerprint() {return JSON.stringify(chatContext());}
 function chatSave() {
   if(!chatState.snapshot)return;
-  try {sessionStorage.setItem('go-review-chat:'+chatState.snapshot.id,JSON.stringify(chatState.records.slice(-40)));}
+  try {sessionStorage.setItem('go-review-chat:'+chatState.snapshot.id,JSON.stringify(chatState.records));}
   catch(error) {chatNotice('Could not retain chat history: '+error.message,true);}
 }
 function chatCitations(parent,text,snapshotID) {
   const seen=new Set();
   for(const match of text.matchAll(/\[(document|symbol|entry):([^\]\n]+)\]/g)) {
     if(seen.has(match[0]))continue;seen.add(match[0]);
-    const action={view:match[1]==='entry'?'flow':match[1],id:match[2],
-      entryID:match[1]==='entry'?match[2]:undefined,snapshotID};
+    const [id,evidenceSnapshot]=match[2].split('|');
+    const action={view:match[1]==='entry'?'flow':match[1],id,
+      entryID:match[1]==='entry'?id:undefined,snapshotID:evidenceSnapshot||snapshotID};
     const link=button('Evidence · '+match[1],()=>chatNavigate(action),parent);
     link.className='chat-citation';link.title=match[2];
   }
@@ -31,17 +32,60 @@ function chatRender(item) {
   if(item.record.role!=='assistant') {
     item.content.textContent=item.record.content;return;
   }
-  GoReviewMarkdown.render(item.content,item.record.content);
-  for(const link of item.content.querySelectorAll('a[href]'))
+  chatMarkdown(item.content,item.record.content);
+}
+function chatMarkdown(target,text) {
+  GoReviewMarkdown.render(target,text);
+  for(const link of target.querySelectorAll('a[href]'))
     if(!/^https?:\/\/|^mailto:/i.test(link.getAttribute('href')))link.removeAttribute('href');
 }
 function chatRecord(role,text) {
-  const record={role,content:text};chatState.records.push(record);
+  const record={role,content:text,snapshotID:chatState.snapshot?.id};chatState.records.push(record);
   const article=el('article',undefined,$('chat-messages'),'chat-message chat-'+role);
-  el('strong',role==='user'?'You':'Local review agent · assessment, not measured evidence',article);
+  el('strong',role==='user'?'You':'Review assistant',article);
+  let activity,activitySummary,activityBody;
+  if(role==='assistant') {
+    activity=el('details',undefined,article,'chat-activity');
+    activity.hidden=true;
+    activitySummary=el('summary','Working…',activity);
+    activityBody=el('div',undefined,activity,'chat-activity-body');
+  }
   const content=el('div',undefined,article,'chat-text');
-  const item={record,article,content};chatRender(item);
+  const item={record,article,content,activity,activitySummary,activityBody};chatRender(item);
   return item;
+}
+const chatToolLabels={review_overview:'Reading application overview',review_flow:'Tracing application flow',
+  review_inspect:'Inspecting a responsibility',review_source:'Reading source',review_document:'Reading documentation',
+  review_evidence:'Inspecting implementation evidence',review_packages:'Exploring packages',
+  review_search:'Searching retained evidence',review_architecture:'Examining architecture',
+  recall_evidence:'Recalling earlier evidence',navigate_ui:'Preparing navigation'};
+function chatWorking(item,text) {
+  item.activity.hidden=false;item.activity.classList.add('working');
+  item.activitySummary.textContent=text;item.article.setAttribute('aria-busy','true');
+  chatNotice(text);
+}
+function chatExploration(item) {
+  if(!item.record.content.trim())return;
+  chatActivity(item,{text:item.record.content});
+  item.record.content='';chatRender(item);
+}
+function chatActivity(item,entry,retain=true) {
+  if(retain)(item.record.activities??=[]).push(entry);
+  item.activity.hidden=false;
+  if(!entry.tool) {
+    const progress=el('div',undefined,item.activityBody,'chat-text chat-progress');
+    chatMarkdown(progress,entry.text);
+    return;
+  }
+  const detail=el('details',undefined,item.activityBody,'chat-tool');
+  el('summary',entry.error?'Could not complete '+entry.tool:(chatToolLabels[entry.tool]||entry.tool),detail);
+  el('pre',entry.error?entry.text:JSON.stringify(entry.args,null,2),detail);
+  if(!entry.error) {
+    const args=entry.args||{},snapshotID=entry.snapshotID;
+    if(entry.tool==='review_document'&&args.id)chatCitations(detail,'[document:'+args.id+']',snapshotID);
+    if(args.symbolID)chatCitations(detail,'[symbol:'+args.symbolID+']',snapshotID);
+    if(args.entryID)chatCitations(detail,'[entry:'+args.entryID+']',snapshotID);
+  }
 }
 function chatScroll() {$('chat-messages').scrollTop=$('chat-messages').scrollHeight;}
 async function chatLoad() {
@@ -50,6 +94,12 @@ async function chatLoad() {
   if(!response.ok)throw Error(data.error||'Unable to load agent status');
   chatState.status=data;
   $('chat-model').textContent=data.enabled?data.model+' · '+data.baseURL:'AI disabled';
+  $('chat-privacy').textContent=data.external?
+    'External provider. Your messages and requested source evidence are sent to this configured service.':
+    'Local provider. Messages and requested evidence stay on this machine.';
+  if(data.external&&chatState.providerNotice!==data.baseURL) {
+    $('chat-info').open=true;chatState.providerNotice=data.baseURL;
+  }
   if(chatState.snapshot?.id!==data.snapshot?.id) {
     chatState.controller?.abort();chatState.lastNavigation=undefined;chatState.records=[];$('chat-messages').replaceChildren();
     chatState.snapshot=data.snapshot;chatState.report=report;
@@ -59,13 +109,24 @@ async function chatLoad() {
         const records=JSON.parse(saved);
         if(!Array.isArray(records)||records.some(r=>!['user','assistant'].includes(r.role)||typeof r.content!=='string'))
           throw Error('Invalid saved chat history; use Clear chat.');
-        for(const r of records.slice(-40)) {const item=chatRecord(r.role,r.content);chatCitations(item.article,r.content,data.snapshot.id);}
+        for(const r of records) {
+          const item=chatRecord(r.role,r.content);
+          item.record.snapshotID=r.snapshotID||data.snapshot.id;
+          chatCitations(item.article,r.content,item.record.snapshotID);
+          if(r.role==='assistant'&&Array.isArray(r.activities)) {
+            for(const activity of r.activities) {
+              if(typeof activity.text!=='string'&&typeof activity.tool!=='string')throw Error('Invalid saved chat activity; use Clear chat.');
+              chatActivity(item,activity);
+            }
+            item.activitySummary.textContent='Explored evidence';
+          }
+        }
       }
     }
   }
   $('chat-send').disabled=!data.enabled||!data.snapshot;
-  chatNotice(!data.enabled?'Local AI is optional. Configure the machine-local go-review/agent.json to enable it.':
-    !data.snapshot?'Open retained evidence first.':'Evidence stays local. No code execution. Navigation requires your permission.');
+  chatNotice(!data.enabled?'Configure a provider in go-review/agent.json to enable chat.':
+    !data.snapshot?'Open retained evidence first.':'Ready');
   return data;
 }
 
@@ -80,6 +141,28 @@ async function chatNavigate(action,expectedFingerprint,signal) {
     signal?.throwIfAborted();
     if(expectedFingerprint!==undefined&&chatFingerprint()!==expectedFingerprint)
       throw Error('View changed manually; automatic navigation cancelled.');
+    if(action.snapshotID!==current.snapshot.id) {
+      const target=current.snapshots?.find(snapshot=>snapshot.id===action.snapshotID);
+      if(!target)throw Error('Evidence is no longer retained; start a new turn.');
+      const sourceResponse=await fetch('/api/snapshot?snapshotID='+encodeURIComponent(target.id),{signal});
+      const next=await sourceResponse.json();
+      if(!sourceResponse.ok)throw Error(next.error||'Unable to read retained module');
+      GoReviewChat.validate(next,action,target.id);
+      signal?.throwIfAborted();
+      if(expectedFingerprint!==undefined&&chatFingerprint()!==expectedFingerprint)
+        throw Error('View changed manually; automatic navigation cancelled.');
+      const selectResponse=await fetch('/api/review/select',{method:'POST',signal,
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshotID:target.id})});
+      const selected=await selectResponse.json();
+      if(!selectResponse.ok)throw Error(selected.error||'Unable to select retained module');
+      signal?.throwIfAborted();
+      if(expectedFingerprint!==undefined&&chatFingerprint()!==expectedFingerprint)
+        throw Error('View changed manually; automatic navigation cancelled.');
+      chatState.report=selected;chatState.snapshot=target;
+      showReviewReport(selected);
+      $('review-modules').value=selected.root;
+      current.snapshot=target;
+    }
     GoReviewChat.validate(report,action,current.snapshot.id);
     if(action.view==='application')go({kind:'application'});
     else if(action.view==='back') {if(!history.length)throw Error('No parent view in navigation history');$('back').click();}
@@ -134,57 +217,63 @@ $('chat-clear').onclick=()=>{
   chatState.lastNavigation=undefined;chatState.records=[];$('chat-messages').replaceChildren();chatSave();chatNotice('Chat cleared.');
 };
 $('chat-stop').onclick=()=>chatState.controller?.abort();
+$('chat-input').onkeydown=event=>{
+  if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229) {
+    event.preventDefault();
+    if(!chatState.sending&&!$('chat-send').disabled)$('chat-form').requestSubmit();
+  }
+};
 $('chat-form').onsubmit=async event=>{
   event.preventDefault();
-  if(chatState.controller)return;
+  if(chatState.sending)return;
   const text=$('chat-input').value.trim();if(!text)return;
+  chatState.sending=true;
   let assistant,completed=false,reader;
   try {
     const state=await chatLoad();
-    if(!state.enabled||!state.snapshot)throw Error('Local agent or evidence is unavailable');
-    const prior=chatState.records.slice(-38).map(({role,content})=>({role,content}));
+    if(!state.enabled||!state.snapshot)throw Error('Review assistant or evidence is unavailable');
+    const prior=chatState.records.map(({role,content})=>({role,content}));
     chatRecord('user',text);assistant=chatRecord('assistant','');
-    const allowNavigation=$('chat-allow-navigation').checked;
-    $('chat-allow-navigation').checked=false;
+    const allowNavigation=GoReviewChat.navigationRequested(text);
     let fingerprint=chatFingerprint();
     const context=chatContext();
     if(chatState.lastNavigation)context.lastConfirmedNavigation=chatState.lastNavigation;
     const controller=new AbortController();chatState.controller=controller;
     $('chat-send').disabled=true;$('chat-stop').disabled=false;$('chat-input').value='';
-    chatNotice('Exploring retained evidence…');
+    chatWorking(assistant,'Working…');
     const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       signal:controller.signal,body:JSON.stringify({message:text,snapshotID:state.snapshot.id,history:prior,
         context,allowNavigation})});
     if(!response.ok){const error=await response.json();throw Error(error.error||'Chat HTTP '+response.status);}
     reader=response.body.getReader();
-    const decoder=new TextDecoder();let pending='',turnStart=0,navigated=false;
+    const decoder=new TextDecoder();let pending='',turnStart=0;
     while(true) {
       const part=await reader.read();
       pending+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});
       let end;
       while((end=pending.indexOf('\n'))>=0) {
+        const messages=$('chat-messages');
+        const follow=messages.scrollHeight-messages.scrollTop-messages.clientHeight<64;
         const line=pending.slice(0,end);pending=pending.slice(end+1);if(!line.trim())continue;
         const message=JSON.parse(line);
-        if(message.type==='turn_start')turnStart=assistant.record.content.length;
+        if(message.type==='turn_start') {
+          turnStart=assistant.record.content.length;chatWorking(assistant,'Working…');
+        }
         else if(message.type==='discard_turn') {
           assistant.record.content=assistant.record.content.slice(0,turnStart);chatRender(assistant);
         }
-        else if(message.type==='text') {assistant.record.content+=message.text;chatRender(assistant);}
+        else if(message.type==='text') {assistant.record.content+=message.text;chatRender(assistant);chatWorking(assistant,'Writing…');}
+        else if(message.type==='exploration') {chatExploration(assistant);chatWorking(assistant,'Exploring evidence…');}
+        else if(message.type==='activity')chatWorking(assistant,message.text);
         else if(message.type==='tool'||message.type==='tool_error') {
-          const item=el('details',undefined,assistant.article,'chat-tool');
-          el('summary',(message.type==='tool_error'?'Tool error · ':'Evidence · ')+message.tool,item);
-          el('pre',message.type==='tool_error'?message.text:JSON.stringify(message.args,null,2),item);
-          if(message.type==='tool') {
-            const args=message.args||{};
-            if(message.tool==='review_document'&&args.id)chatCitations(item,'[document:'+args.id+']',state.snapshot.id);
-            if(args.symbolID)chatCitations(item,'[symbol:'+args.symbolID+']',state.snapshot.id);
-            if(args.entryID)chatCitations(item,'[entry:'+args.entryID+']',state.snapshot.id);
-          }
-        } else if(message.type==='navigation') {
+          chatWorking(assistant,chatToolLabels[message.tool]||'Exploring evidence…');
+          chatActivity(assistant,{tool:message.tool,args:message.args,text:message.text,
+            error:message.type==='tool_error',snapshotID:message.args?.snapshotID||state.snapshot.id});
+        } else if(message.type==='tool_done')chatWorking(assistant,'Working…');
+        else if(message.type==='navigation') {
           const action=message.navigation;
           if(allowNavigation&&action.automatic) {
             await chatNavigate(action,fingerprint,controller.signal);
-            navigated=true;
             fingerprint=chatFingerprint();
           } else {
             const show=button('Show in diagram · '+(action.label||action.view),()=>chatNavigate(action),assistant.article);
@@ -192,22 +281,27 @@ $('chat-form').onsubmit=async event=>{
           }
         } else if(message.type==='error')throw Error(message.text);
         else if(message.type==='done')completed=true;
-        chatScroll();
+        if(follow)chatScroll();
       }
       if(part.done)break;
     }
     if(!completed)throw Error('Chat stream ended before completion.');
     chatCitations(assistant.article,assistant.record.content,state.snapshot.id);
-    chatNotice('Response complete · '+(navigated?'UI navigation applied.':'No automatic UI navigation performed.')+' Model assessment, not certification.');
+    chatNotice('Ready');
   }catch(error){
     const reason=error.name==='AbortError'?'Stopped.':error.message;
     if(assistant)el('p',reason,assistant.article,'error');
     chatNotice(reason,error.name!=='AbortError');
     if(assistant&&!completed) {assistant.record.content+='\n[Response incomplete: '+reason+']';}
   }finally {
+    if(assistant) {
+      assistant.activity.classList.remove('working');
+      assistant.activitySummary.textContent=completed?'Explored evidence':'Activity · interrupted';
+      assistant.article.removeAttribute('aria-busy');
+    }
     chatState.controller?.abort();
     if(reader)reader.releaseLock();
-    chatState.controller=null;$('chat-send').disabled=!chatState.status?.enabled;$('chat-stop').disabled=true;chatSave();
+    chatState.controller=null;chatState.sending=false;$('chat-send').disabled=!chatState.status?.enabled;$('chat-stop').disabled=true;chatSave();
   }
 };
 

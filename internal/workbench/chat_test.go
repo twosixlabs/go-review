@@ -25,12 +25,16 @@ func TestAgentMCPConversation(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
-		if len(request.Tools) != 10 {
-			t.Errorf("got %d tools, want actual nine MCP tools and UI navigation", len(request.Tools))
+		if len(request.Tools) < 10 {
+			t.Errorf("missing MCP/navigation tools: %d", len(request.Tools))
 		}
 		if calls == 1 {
-			if request.ToolChoice != "required" {
-				t.Error("first model turn must use a native tool, not invent tool execution")
+			if len(request.Messages) < 64 || request.Messages[1].Content != "Earlier message 0" ||
+				request.Messages[60].Content != "Earlier message 59" {
+				t.Error("long conversation was truncated despite fitting the context budget")
+			}
+			if request.ToolChoice != "auto" {
+				t.Error("ordinary answers must not require a tool or navigation decision")
 			}
 			if request.Messages[len(request.Messages)-1].Role != "tool" {
 				t.Error("current view evidence was not refreshed through MCP")
@@ -43,7 +47,6 @@ func TestAgentMCPConversation(t *testing.T) {
 			if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "Service purpose.") {
 				t.Errorf("missing real MCP evidence: %+v", request.Messages)
 			}
-			text = `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"stay","function":{"name":"navigate_ui","arguments":"{\"view\":\"unchanged\"}"}}]},"finish_reason":"tool_calls"}]}`
 		}
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", text)
 	}))
@@ -63,8 +66,19 @@ func TestAgentMCPConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	status.Body.Close()
-	request := fmt.Sprintf(`{"message":"Explain purpose","snapshotID":%q,"history":[],"context":{}}`, state.Snapshot.ID)
-	response, err := http.Post(server.URL+"/api/chat", "application/json", strings.NewReader(request))
+	history := make([]intelligence.Message, 60)
+	for i := range history {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		history[i] = intelligence.Message{Role: role, Content: fmt.Sprintf("Earlier message %d", i)}
+	}
+	request, err := json.Marshal(chatRequest{Message: "Explain purpose", SnapshotID: state.Snapshot.ID, History: history})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.Post(server.URL+"/api/chat", "application/json", strings.NewReader(string(request)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +93,7 @@ func TestAgentMCPConversation(t *testing.T) {
 		events = append(events, e)
 	}
 	data, _ := json.Marshal(events)
-	if response.StatusCode != 200 || !strings.Contains(string(data), "Purpose: service") || calls != 3 {
+	if response.StatusCode != 200 || !strings.Contains(string(data), "Purpose: service") || calls != 2 {
 		t.Fatalf("status=%d calls=%d events=%s", response.StatusCode, calls, data)
 	}
 	if s.reviewRunning {
@@ -87,11 +101,20 @@ func TestAgentMCPConversation(t *testing.T) {
 	}
 }
 
-func TestAgentRejectsExcessContextBeforeProviderRequest(t *testing.T) {
+func TestAgentCompactsOldConversationBeforeProviderRequest(t *testing.T) {
 	called := false
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-		http.Error(w, "unexpected model request", 500)
+		var request struct {
+			Messages []intelligence.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, strings.Repeat("x", 100)) {
+			t.Error("old history leaked into system instructions")
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Current answer\"},\"finish_reason\":\"stop\"}]}\n\n")
 	}))
 	defer model.Close()
 	s := New(&review.Report{Module: "sample"})
@@ -101,11 +124,11 @@ func TestAgentRejectsExcessContextBeforeProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := chatRequest{Message: "Explore", SnapshotID: snapshot.info.ID,
-		History: []intelligence.Message{{Role: "user", Content: strings.Repeat("x", 65<<10)}}}
+		History: []intelligence.Message{{Role: "user", Content: strings.Repeat("x", 300<<10)}, {Role: "assistant", Content: "Old answer"}}}
 	err = s.runChat(context.Background(), intelligence.Config{Enabled: true, BaseURL: model.URL, Model: "ornith"},
 		request, snapshot, service, func(chatEvent) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "64 KiB") || called {
-		t.Fatalf("oversized context reached model=%v error=%v", called, err)
+	if err != nil || !called {
+		t.Fatalf("old history prevented current investigation: model=%v error=%v", called, err)
 	}
 }
 
@@ -164,8 +187,8 @@ func TestAgentMCPToolBoundaries(t *testing.T) {
 		{"navigate_ui", `{"view":"document","id":"doc"}`, false, `"automatic":false`},
 		{"navigate_ui", `{"view":"document","id":"doc"}`, true, `"automatic":true`},
 		{"navigate_ui", `{"view":"document","id":"missing"}`, true, `invalid navigation`},
-		{"review_document", `{"id":"doc","snapshotID":"wrong"}`, false, `conversation snapshot cannot change`},
-		{"review_overview", `{"module":"wrong"}`, false, `conversation is pinned`},
+		{"review_document", `{"id":"doc","snapshotID":"wrong"}`, false, `unknown or stale`},
+		{"review_overview", `{"module":"wrong"}`, false, `unknown or stale`},
 		{"execute_shell", `{}`, true, `unavailable tool`},
 	} {
 		t.Run(scenario.name+scenario.args+fmt.Sprint(scenario.allow), func(t *testing.T) {

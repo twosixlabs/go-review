@@ -21,9 +21,6 @@ func TestAgentMCPRejectsTextualToolRequests(t *testing.T) {
 			content = `[TOOL_REQUEST><invoke name="review_document">doc</invoke>[END_TOOL_REQUEST]`
 		}
 		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}, "finish_reason": "stop"}}})
-		if calls == 2 {
-			data = []byte(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"stay","function":{"name":"navigate_ui","arguments":"{\"view\":\"unchanged\"}"}}]},"finish_reason":"tool_calls"}]}`)
-		}
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", data)
 	}))
 	defer model.Close()
@@ -35,7 +32,7 @@ func TestAgentMCPRejectsTextualToolRequests(t *testing.T) {
 	}
 	var events []chatEvent
 	err = s.runChat(context.Background(), intelligence.Config{Enabled: true, BaseURL: model.URL, Model: "ornith"}, chatRequest{Message: "Explain"}, snapshot, service, func(e chatEvent) error { events = append(events, e); return nil })
-	if err != nil || calls != 3 {
+	if err != nil || calls != 2 {
 		t.Fatalf("invalid syntax was accepted as an answer: calls=%d err=%v events=%+v", calls, err, events)
 	}
 	discard := false

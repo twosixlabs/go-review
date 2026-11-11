@@ -12,7 +12,7 @@ import (
 	"github.com/russellbrasser/go-review/internal/review"
 )
 
-func TestAgentMCPRequiresActualNavigationDecision(t *testing.T) {
+func TestAgentMCPNavigationIsOptional(t *testing.T) {
 	for _, allowed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("authorized-%t", allowed), func(t *testing.T) {
 			testAgentNavigationDecision(t, allowed)
@@ -34,10 +34,7 @@ func testAgentNavigationDecision(t *testing.T, allowed bool) {
 		}
 		var delta any = map[string]string{"content": "I expanded the document."}
 		finish := "stop"
-		if len(request.Tools) == 1 && request.Tools[0].Function.Name == "navigate_ui" {
-			if request.ToolChoice != "required" {
-				t.Error("navigation decision is not required")
-			}
+		if calls == 1 {
 			delta = map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "navigate", "function": map[string]string{"name": "navigate_ui", "arguments": `{"view":"document","id":"doc"}`}}}}
 			finish = "tool_calls"
 		}
@@ -63,7 +60,7 @@ func testAgentNavigationDecision(t *testing.T, allowed bool) {
 			}
 			return nil
 		})
-	if err != nil || !navigated || calls != 3 {
+	if err != nil || !navigated || calls != 2 {
 		t.Fatalf("prose stood in for a navigation action: calls=%d navigated=%v err=%v", calls, navigated, err)
 	}
 }

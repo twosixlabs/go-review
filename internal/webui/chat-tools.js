@@ -2,6 +2,11 @@
   'use strict';
   const common=typeof module!=='undefined'&&module.exports;
   const query=common?require('./review-query-tools.js'):root.GoReviewQuery;
+  // Only an explicit movement request authorizes automatic navigation. Other
+  // phrasings still work through the agent's clickable destination proposal.
+  function navigationRequested(text) {
+    return /(?:^|[.!?]\s*)(?:(?:please|then)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:show|open|expand|collapse|focus|select|navigate|go|take me|bring me|return|switch|zoom)\b/i.test(text.trim());
+  }
   function validate(report,action,snapshotID) {
     if(!snapshotID||action.snapshotID!==snapshotID)throw Error('Stale chat snapshot; start from current evidence.');
     const operation={document:'document',symbol:'evidence',package:'packages',architecture:'architecture',flow:'flow'}[action.view];
@@ -17,6 +22,6 @@
     if(action.view==='flow')query.query(report,action.nodeID||action.from||action.to?'inspect':'flow',args);
     return action;
   }
-  const api={validate};
+  const api={validate,navigationRequested};
   if(common)module.exports=api;else root.GoReviewChat=api;
 })(typeof globalThis==='undefined'?this:globalThis);

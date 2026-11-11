@@ -361,7 +361,8 @@ inventory results.
 ### Permission boundaries
 
 - Evidence queries remain read-only, including public MCP.
-- Navigation uses existing per-turn permission or an explicit Show action.
+- Navigation uses explicit user movement requests (no per-turn checkbox) or an
+  explicit Show action. Ordinary explanations need no navigation/no-op decision.
   Manual movement cancels late automatic navigation. Validate the entire target
   before applying one coherent history transition.
 - Review-state mutations require an explicit request or confirmed action;

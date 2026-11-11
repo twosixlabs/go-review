@@ -1,8 +1,8 @@
 # Go Review
 
-## Optional local review assistant
+## Optional review assistant
 
-The **Chat** button opens an evidence-backed local assistant. It uses the same
+The **Chat** button opens an evidence-backed assistant. It uses the same
 nine read-only MCP tools as external reviewers, not filesystem or shell access.
 Responses distinguish model assessments from collected facts; gauges remain
 measured evidence, not an AI quality score.
@@ -28,27 +28,54 @@ directory, not the reviewed repository:
 
 Restart Go Review after changing this file. Missing configuration, or
 `"enabled": false`, disables AI without affecting ordinary review. The provider
-must use a literal HTTP loopback IP; redirects and cloud fallback are disabled.
-No API key is required for this local configuration. Model availability and
+may use HTTP on loopback or HTTPS for a non-local service. Redirects and
+automatic provider fallback are disabled. No API key is required for the local
+configuration above. For an authenticated OpenAI-compatible provider:
+
+```json
+{
+  "enabled": true,
+  "baseURL": "https://your-provider.example/v1",
+  "model": "your-tool-capable-model",
+  "apiKeyEnv": "GO_REVIEW_API_KEY"
+}
+```
+
+Set that environment variable in the process launching Go Review. Alternatively,
+set `apiKey` directly in the machine-local configuration (not both); protect that
+file as a secret. Keys are sent only in the provider authorization header, never
+returned by the status API or stored in chat history.
+Model availability and
 native function-tool calling are required; failures are shown explicitly.
 
 Chat sends your question, current UI context, recent conversation and requested
-retained evidence to that local model. Opening the workbench does not send
+retained evidence to the explicitly configured model. **With an external
+provider, those messages and requested source evidence leave this machine.**
+Provider & privacy identifies the destination; external configuration opens
+that disclosure on first use. Opening the workbench does not send
 project data to the model. Conversations are kept in this tab's browser session
 storage, scoped to an immutable evidence snapshot; **Clear chat** removes that
-snapshot's history. **Stop** cancels the active provider/MCP request.
+snapshot's history. **Stop** cancels the active provider/MCP request. Enter sends;
+Shift+Enter inserts a newline. Send remains available as a button.
+Each response groups tool activity and brief progress updates in one expandable
+activity section, separate from the answer. A working indicator stays visible
+while waiting for the model or retrieving evidence. The activity records
+observable operations, not the model's private reasoning.
 Assistant messages render sanitized Markdown, including headings, lists, tables
 and code blocks, while streaming and when restoring saved history. Evidence
 buttons remain actionable; embedded HTML cannot run scripts or load images.
 
-Check **Allow navigation this turn** when asking the assistant to show, expand,
-focus or select something. Otherwise it offers **Show in diagram** buttons
+Ask the assistant to show, open, expand, focus or select something to authorize
+navigation for that request; no checkbox is needed. Ordinary explanations leave
+the view alone. Other phrasings can still offer **Show in diagram** buttons
 without changing your view. Navigation uses existing controls and preserves
 Back; invalid/stale destinations are rejected. Evidence citations are clickable.
 Tool activity also links directly to retrieved documents, symbols and entries.
 Expansion reveals children in the current diagram; focus opens a deeper view.
-Each turn must issue a navigation action/proposal or explicitly choose not to
-move; merely querying a flow is not navigation or a proposal.
+There is no required navigation/no-op call or non-navigation announcement.
+The agent can explore other retained modules without changing the displayed
+module. Cross-module evidence links identify their snapshot; opening one
+selects that retained module, with stale references rejected.
 The agent cannot edit code, run tests, modify review scope or browse arbitrary
 paths. Source comments/documents remain untrusted evidence, not instructions.
 
@@ -84,13 +111,18 @@ sh scripts/test-agent-capabilities.sh prompt-live \
 This opt-in evaluation makes real provider calls through the MCP-backed agent.
 It checks bounded retrieval and supported answers, not prompt wording; passing
 these scenarios does not establish reliability on every project.
-The current Ornith evaluation passes scoped metric attribution and missing-symbol
-handling, but still fails the orientation retrieval budget. It can also narrate
-or repeat navigation bookkeeping despite instructions not to. These are known
-model-following limitations, not guarantees enforced by the prompt.
-
-Exploration is bounded to 16 model steps per turn, with explicit context/output
-limits. Ask focused follow-ups for larger investigations. A local model may
+Exploration has no prescribed call count or one-flow restriction. Defaults allow
+64 model rounds and a 15-minute turn deadline. `maxSteps` (1–256) and
+`contextBytes` (32768–2097152, default 262144) optionally tune resource limits.
+The byte budget includes message history and tool schemas; it is not a token
+count or a guarantee of compatibility with every model's context window.
+Only when the budget requires it, older large tool results and conversation text
+leave the active prompt, with exact text available through archive handles and
+visible context-management activity. The full browser transcript has no
+message-count cutoff and remains visible independently of the active prompt.
+Chat request transport is bounded to 4 MiB. Recent tool pairs and the current
+question are preserved. Archives are turn-owned, bounded to 8 MiB, and never replace the
+retained source as authority. Limit failures remain explicit. A model may
 misinterpret evidence or fail to call tools; neither successful tool calls nor
 test coverage certify project quality.
 
@@ -356,7 +388,7 @@ with Unicode-character `total` and `nextOffset`; continue using `textOffset` /
 `textLimit` in the same request context. Comment inventories return location,
 index and length; add `commentIndex` to read the complete selected text.
 Documents and comments remain fully retrievable. Chat enforces the same 32 KiB
-tool-result limit and a 64 KiB message-context limit before provider calls,
+tool-result limit and a configurable message/tool-schema context budget before provider calls,
 returning an explicit error rather than evicting evidence silently.
 
 Metrics, contextual

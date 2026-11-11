@@ -18,7 +18,7 @@ func TestAgentConfig(t *testing.T) {
 	if err != nil || cfg.Enabled {
 		t.Fatalf("absent config: %+v %v", cfg, err)
 	}
-	for _, base := range []string{"https://example.com/v1", "file:///tmp", "http://localhost:1235/v1", "http://127.0.0.1:1235/v1?x=y"} {
+	for _, base := range []string{"http://example.com/v1", "file:///tmp", "https://user:pass@example.com/v1", "http://127.0.0.1:1235/v1?x=y"} {
 		if err := (Config{Enabled: true, BaseURL: base, Model: "ornith"}).Validate(); err == nil {
 			t.Errorf("accepted nonliteral loopback URL %s", base)
 		}
@@ -29,6 +29,39 @@ func TestAgentConfig(t *testing.T) {
 	cfg, err = LoadConfig(path)
 	if err != nil || cfg.Model != "ornith-1.5-35b-a3b-mlx" {
 		t.Fatalf("%+v %v", cfg, err)
+	}
+}
+
+func TestAgentConfigRemoteAndCredentials(t *testing.T) {
+	for _, base := range []string{"https://example.com/v1", "http://localhost:1235/v1", "http://[::1]:1235/v1"} {
+		if err := (Config{Enabled: true, BaseURL: base, Model: "reviewer"}).Validate(); err != nil {
+			t.Errorf("valid endpoint %s: %v", base, err)
+		}
+	}
+	t.Setenv("REVIEW_TEST_KEY", "fixture-key")
+	file := filepath.Join(t.TempDir(), "agent.json")
+	if err := os.WriteFile(file, []byte(`{"enabled":true,"baseURL":"https://example.com/v1","model":"reviewer","apiKeyEnv":"REVIEW_TEST_KEY"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verify authentication on a controlled loopback endpoint, never send source externally.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fixture-key" {
+			t.Error("configured key was not attached to provider request")
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer server.Close()
+	cfg.BaseURL = server.URL
+	if _, err := (Provider{Config: cfg}).Complete(context.Background(), nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_TEST_KEY", "")
+	if _, err := LoadConfig(file); err == nil {
+		t.Fatal("missing configured key environment variable was silently ignored")
 	}
 }
 
@@ -110,4 +143,24 @@ func TestAgentProviderLive(t *testing.T) {
 		t.Fatalf("tool continuation %+v %v", final, err)
 	}
 	t.Logf("verified %s tool call and result continuation", p.Config.Model)
+}
+
+func TestAgentProviderRedactsCredentialErrorsAndRejectsRedirects(t *testing.T) {
+	for _, redirect := range []bool{false, true} {
+		targetCalls := 0
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { targetCalls++ }))
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if redirect {
+				http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+				return
+			}
+			http.Error(w, "Rejected fixture-secret", http.StatusUnauthorized)
+		}))
+		_, err := (Provider{Config: Config{Enabled: true, BaseURL: source.URL, Model: "fixture", APIKey: "fixture-secret"}}).Complete(context.Background(), nil, nil, nil)
+		source.Close()
+		target.Close()
+		if err == nil || strings.Contains(err.Error(), "fixture-secret") || targetCalls != 0 {
+			t.Fatalf("redirect=%v targetCalls=%d err=%v", redirect, targetCalls, err)
+		}
+	}
 }

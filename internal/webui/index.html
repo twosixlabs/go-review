@@ -58,11 +58,12 @@
 <script src="/workspace.js"></script>
 <link rel="stylesheet" href="/tutorial.css">
 <script src="/tutorial.js"></script>
-<aside id="chat-panel" aria-label="Local review chat" hidden>
+<aside id="chat-panel" aria-label="Review assistant" hidden>
 <div class="chat-heading"><strong>Review assistant</strong><button id="chat-clear" type="button">Clear chat</button><button id="chat-close" type="button" aria-label="Close chat">Close</button></div>
-<div id="chat-model"></div><div id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite"></div><div id="chat-status" role="status"></div>
+<details id="chat-info"><summary>Provider &amp; privacy</summary><div id="chat-model"></div><p id="chat-privacy"></p></details>
+<div id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite"></div><div id="chat-status" role="status"></div>
 <form id="chat-form"><label for="chat-input">Explore or assess this project</label><textarea id="chat-input" rows="3" maxlength="16000" placeholder="Explain this flow, assess a concern, or ask to show an entry…"></textarea>
-<label><input id="chat-allow-navigation" type="checkbox">Allow navigation this turn</label><div><button id="chat-send" type="submit" disabled>Send</button><button id="chat-stop" type="button" disabled>Stop</button></div></form>
+<div class="chat-compose-actions"><span>Enter to send · Shift+Enter for a new line</span><button id="chat-send" type="submit" disabled>Send</button><button id="chat-stop" type="button" disabled>Stop</button></div></form>
 </aside>
 <link rel="stylesheet" href="/chat.css">
 <script src="/chat-tools.js"></script><script src="/chat.js"></script>

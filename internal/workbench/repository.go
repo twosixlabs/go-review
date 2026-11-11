@@ -133,7 +133,8 @@ func (s *Server) repositoryReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) selectReviewModule(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Directory string `json:"directory"`
+		Directory  string `json:"directory"`
+		SnapshotID string `json:"snapshotID"`
 	}
 	if !decodeRequest(w, r, &request) {
 		return
@@ -143,6 +144,15 @@ func (s *Server) selectReviewModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.collect.Unlock()
+	if request.SnapshotID != "" {
+		snapshot, _, err := s.newChatService().snapshot(request.SnapshotID, "")
+		if err != nil {
+			failure(w, 409, err.Error())
+			return
+		}
+		s.publish(w, snapshot.report)
+		return
+	}
 	s.mu.RLock()
 	run := s.review
 	s.mu.RUnlock()

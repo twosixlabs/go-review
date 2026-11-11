@@ -86,6 +86,16 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		failure(w, 405, "GET required")
 		return
 	}
+	if id := r.URL.Query().Get("snapshotID"); id != "" {
+		snapshot, _, err := s.newChatService().snapshot(id, "")
+		if err != nil {
+			failure(w, 409, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snapshot.report)
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.report == nil {

@@ -4,19 +4,30 @@ Status: implementation design derived from the agreed requirements. This is
 not a claim that every roadmap capability has shipped. See the README for
 available commands and current limitations.
 
-## Optional local chat
+## Optional chat
 
-The optional chat service uses an OpenAI-compatible local provider. Provider
+The optional chat service uses an explicitly configured OpenAI-compatible provider. Provider
 configuration lives in the OS user configuration directory, outside reviewed
-repositories. Its only model destination is a configured literal HTTP loopback
-address, with redirects disabled; no cloud fallback or embeddings are involved.
+repositories. HTTP is allowed for loopback; non-local endpoints require HTTPS.
+Optional `apiKey` or `apiKeyEnv` supplies bearer authentication. Keys never enter
+browser status/history. Redirects and automatic provider fallback are disabled.
+The UI identifies external providers and discloses source transmission.
 
 Each chat turn owns an in-memory SDK client connection to the same MCP server
 registration used by the public endpoint. Tool schemas are discovered, not
-reimplemented. Snapshot IDs are pinned outside model arguments; the agent
-cannot switch modules or execute target code. Structured tool results avoid
-duplicating the SDK text fallback. Bounded histories, response sizes, steps and
-timeouts prevent unbounded evidence accumulation. Browser Stop propagates
+reimplemented. Snapshot references are validated against retained reports; the
+agent can read across retained modules without changing UI selection or
+executing target code. Structured tool results avoid
+duplicating the SDK text fallback. Configurable active-context and step budgets,
+bounded responses, and timeouts control resource use without a transcript
+message-count cutoff. The default active context budget is 256 KiB including
+tool schemas; browser-to-server requests are bounded to 4 MiB. Turn-owned exact-evidence
+archives compact old tool results between rounds; a bounded recall tool restores
+paged text. When the active budget requires displacing old conversation,
+its exact text is also archived and retrievable, never promoted to trusted
+source evidence. The browser retains the full transcript independently of the
+active model context. Archives last for the current turn; later turns requery
+source evidence. Browser Stop propagates
 cancellation through model and MCP requests.
 
 The browser sends current navigation context and receives newline-delimited
@@ -28,16 +39,23 @@ Comments, documents and tool output are evidence, not privileged instructions.
 Navigation uses a separate allowlisted `navigate_ui` function, not a mutable
 public review MCP tool. Server validation resolves retained IDs through the
 shared query engine; browser validation repeats against current evidence.
-Explicit per-turn permission permits direct navigation. Otherwise proposals
+An explicit movement request supplies per-turn navigation permission through
+the composer, without a checkbox. Unrecognized or unsolicited destinations
 require a Show in diagram click. Late automatic actions are rejected after a
 manual context change. Existing entry/focus/expansion/document/navigation
 handlers preserve evidence semantics and Back history. The next request includes
 the last confirmed browser navigation; dispatch alone is not proof of movement.
 Each turn refreshes the current evidence through MCP rather than treating prior
-model prose as facts. A turn cannot finish without a native navigation decision
-(a validated action/proposal or explicit unchanged view). Expansion
+model prose as facts. Ordinary responses require no navigation decision or
+no-op call. Expansion
 and focus remain separate operations. Retrieved document, symbol and entry tool
 activity provides evidence links independently of model citation formatting.
+
+Each response has one expandable activity section for tool operations and public
+progress summaries, distinct from its final answer. Working state spans model
+waits, tool calls, and response generation. Provider reasoning channels are not
+rendered. Enter sends except during IME composition; Shift+Enter inserts a line.
+No MSS/Starlark mediation or generated-program execution is introduced.
 
 Tool-shaped prose is never parsed or executed. If a local template prints
 unparsed tool markup, a visible protocol warning requests a native-tool

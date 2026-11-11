@@ -9,6 +9,7 @@ async function main() {
   const stateResponse=await fetch(new URL('/api/chat/status',url));
   const state=await stateResponse.json();
   if(!stateResponse.ok||!state.enabled||!state.snapshot)throw Error(JSON.stringify(state));
+  if(state.external)throw Error('This acceptance probe only sends retained project evidence to a local provider');
   const response=await fetch(new URL('/api/chat',url),{method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({message:prompt,snapshotID:state.snapshot.id,history:[],
