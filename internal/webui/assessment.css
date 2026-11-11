@@ -1,0 +1,32 @@
+.architecture-indicator{display:inline-block;font-size:18px;font-weight:bold;border:1px solid currentColor;border-radius:6px;padding:8px 14px}
+.level-clear{color:#93d6bd}
+.level-watch{color:#f1d17b}
+.level-concern{color:#ffb36b}
+.level-high-concern{color:#ff9494}
+.level-not-assessed{color:#a6b7cd}
+.signal-package{display:block;width:100%;text-align:left;margin:6px 0}
+.signal-finding{border-left:3px solid #6b94b5;padding:6px 12px;margin:12px 0}
+.signal-finding button{max-width:100%;text-align:left;overflow-wrap:anywhere}
+.signal-finding p{white-space:normal}
+#architecture-signals[aria-pressed=true]{background:#365c7c;border-color:#95d0fc}
+.contextual-architecture{margin:8px 0 16px}
+.contextual-architecture p{margin:4px 0 8px;white-space:normal}
+.signals-home #application-overview pre{white-space:pre-wrap;overflow-wrap:anywhere}
+#signal-summary,.context-signal-summary{display:flex;align-items:center;flex-wrap:wrap;padding:0 12px 8px}
+.context-signal-summary.overview-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:0 0 8px}
+.signal-metric[role=button],.signal-metric[role=button] .metric-dial{cursor:pointer}
+.signal-metric[role=button]:hover .metric-label{text-decoration:underline}
+.signal-scope{font-size:10px;color:#a6b7cd}
+#canvas>#graph{height:calc(100% - 130px)}
+#application-overview{height:calc(100% - 110px)}
+.node .node-signals text{font:12px system-ui;fill:currentColor;pointer-events:auto}
+.node .node-signals .signal-label{font:9px system-ui;fill:#bdcfe4}
+.node-signals .signal-link{cursor:pointer;pointer-events:bounding-box}
+.signal-link:focus text{font-weight:bold;text-decoration:underline}
+.architecture-marker{fill:currentColor;stroke:#101722;stroke-width:1}
+.overview-metrics{display:flex;align-items:center;flex-wrap:wrap;column-gap:0}
+.context-signal-summary .metric-caption{min-width:0}
+.signal-scope{flex-basis:100%;grid-column:1/-1}
+.endpoint-metrics{grid-column:1/-1}
+.startup-metrics,.package-metrics{margin-top:8px}
+#hygiene[aria-pressed=true]{background:#365c7c;border-color:#95d0fc}

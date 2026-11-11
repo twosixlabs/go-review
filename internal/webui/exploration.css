@@ -1,0 +1,65 @@
+.assessment{flex-wrap:wrap;background:#162334;padding:8px 20px;gap:8px;font-size:12px}
+.assessment button{font-size:12px;padding:7px 10px}
+.assessment [aria-pressed=true]{background:#365c7c;border-color:#95d0fc}
+.assessment span{color:#aac8e1}
+main{height:calc(100vh - 270px);min-height:500px;grid-template-columns:210px minmax(400px,1fr) 390px}
+.control-edge{stroke-width:2}
+.control-edge.true{stroke:#8cdbb0}
+.control-edge.false{stroke:#f5bd81}
+.backedge{stroke-dasharray:6 4}
+.edge-label{fill:#bdcfe4;font:12px system-ui;paint-order:stroke;stroke:#101722;stroke-width:5px}
+.edge-label.true{fill:#8cdbb0}
+.edge-label.false{fill:#f5bd81}
+.flow-node text{font:12px ui-monospace,monospace}
+.flow-node .step-kind{font:11px system-ui;fill:#9acbfa}
+.flow-node .sub{font:11px system-ui}
+.flow-node.unreachable{opacity:.55}
+.flow-node.unreachable rect{stroke-dasharray:5 3}
+.flow-node.selected-step rect{stroke:#fff;stroke-width:3}
+.flow-node.cov-covered rect{fill:#1e4438;stroke:#86c9a6}
+.flow-node.cov-uncovered rect{fill:#4c2b35;stroke:#e79c9c}
+.flow-node.cov-mixed rect{fill:#49412c;stroke:#e4c279}
+.badge.cov-covered{background:#1e4438}
+.badge.cov-uncovered{background:#4c2b35}
+.badge.cov-mixed{background:#49412c}
+.step-comment{border-left:3px solid #6b94b5;padding-left:12px;color:#bed3e7}
+.flow-node.data-boundary rect{stroke:#f5bd81;stroke-dasharray:6 3}
+.data-boundary-note{border-left:3px solid #f5bd81;padding-left:12px;color:#f5d0a6}
+.node .callee-link{font:11px system-ui;fill:#92c8ff}
+.tone-green{--metric-color:#76d5a0}
+.tone-amber{--metric-color:#e4cc72}
+.tone-orange{--metric-color:#f5ac68}
+.tone-red{--metric-color:#ec8187}
+.tone-unknown{--metric-color:#90a0b4}
+.metric-gauge{display:inline-flex;align-items:center;gap:6px;margin:4px 14px 8px 0;color:var(--metric-color);font-variant-numeric:tabular-nums}
+.metric-gauge .metric-dial{width:32px;height:20px;cursor:default;overflow:visible;flex:none}
+.metric-caption{display:flex;flex-direction:column;gap:2px}
+.metric-caption strong{font-size:13px}
+.metric-label{font-size:10px;color:#bdcfe4}
+.metric-dial .dial-value,.node .node-gauge .dial-value{font:bold 12px system-ui;fill:var(--metric-color)}
+.metric-dial .dial-label,.node .node-gauge .dial-label{font:9px system-ui;fill:#bdcfe4}
+.edge.obstructed{stroke:#ec8187;stroke-dasharray:3 4}
+.graph-hint{position:absolute;bottom:4px;left:12px;font-size:10px;color:#a6b7cd;pointer-events:none}
+.node:active{cursor:grabbing}
+.metric-gauge:focus{outline:1px solid #92c8ff}
+.tools{flex-wrap:wrap}
+.review-axis{font:14px system-ui;fill:#bdcfe4}
+.review-grid{stroke:#33425a;stroke-width:1}
+.review-unknown{fill:#1d2939;stroke:#718198;stroke-dasharray:5 4}
+.review-point circle{stroke:#a8b8cb;stroke-width:1.5}
+.review-point:hover circle,.review-point:focus circle,.review-point.selected-point circle{stroke:white;stroke-width:3}
+.review-point .review-count{font:bold 9px system-ui;fill:white;paint-order:stroke;stroke:#111827;stroke-width:2px}
+#list select{width:100%;margin:6px 0 12px;padding:8px;background:#1d2b40;color:#e5efff;border:1px solid #445773;border-radius:5px}
+.review-package-name{display:block;color:#a6b7cd;font-size:10px}
+.review-list-metrics{display:flex;justify-content:space-between;font-size:11px;color:#bdcfe4;margin-top:3px}
+.logical-target-package{display:block;color:#a6b7cd;font-size:11px}
+.logical-reference-source{display:block;white-space:normal;color:#bddbbf;font:10px ui-monospace,monospace;margin-top:4px}
+.logical-separator{color:#8fbbda}
+#breadcrumb button{font-size:12px;padding:5px 8px;max-width:100%;overflow-wrap:anywhere}
+#list input{width:100%;margin-bottom:10px;box-sizing:border-box}
+.evidence-form{display:flex;flex-direction:column;align-items:stretch;padding:0;border:0}
+.evidence-form input{width:100%;margin-bottom:10px}
+.evidence-form input[type=checkbox]{width:auto;margin-right:8px}
+.evidence-form label{white-space:normal;line-height:1.6}
+@media(max-width:1050px){main{grid-template-columns:180px minmax(300px,1fr) 320px}}
+@media(max-width:760px){main{display:flex;height:auto}#canvas{height:650px}aside{max-height:550px}.assessment{justify-content:flex-start}}

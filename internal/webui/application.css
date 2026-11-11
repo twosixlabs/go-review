@@ -1,0 +1,42 @@
+[hidden]{display:none!important}
+/* Let the diagram consume the space left by wrapped tools and gauges. */
+#canvas{display:flex;flex-direction:column;min-width:0}
+#canvas>#breadcrumb,#canvas>#signal-summary,#canvas>.tools{flex:none}
+#canvas>#graph{flex:1;min-height:0;height:auto}
+#canvas>#application-overview{flex:1;min-height:0;height:auto}
+body>nav{flex-wrap:wrap}
+.application-home .assessment{display:none}
+.application-home main{height:calc(100vh - 220px)}
+#application-overview{overflow:auto;height:calc(100% - 65px);padding:4px 20px 24px}
+#application-overview h1{font-size:23px;margin:6px 0}
+.application-intro{color:#bdcfe4;max-width:65em}
+.endpoint-group-title{margin:22px 0 8px;font-size:15px;color:#96caff}
+.endpoint-row{display:grid;grid-template-columns:58px minmax(0,1fr);gap:7px 12px;width:100%;text-align:left;margin-bottom:7px;padding:12px}
+.endpoint-method{font:bold 11px ui-monospace,monospace;color:#93d6bd;background:#173c36;padding:5px;border-radius:4px;align-self:start;text-align:center}
+.endpoint-path{font:13px ui-monospace,monospace;overflow-wrap:anywhere;align-self:center}
+.endpoint-handler{grid-column:2;color:#a6b7cd;font-size:11px}
+#list .endpoint-selected{background:#304d70;border-color:#95d0fc}
+#application[aria-pressed=true]{background:#365c7c;border-color:#95d0fc}
+#application-overview>button:not(.endpoint-row){display:block;width:100%;text-align:left;margin:8px 0;overflow-wrap:anywhere}
+.walkthrough-call{border-left:3px solid #6b94b5;padding-left:12px;margin:12px 0}
+.related-documentation{margin:8px 0 16px}
+.related-documentation p{margin:2px 0 8px}
+#document-selector{display:block;width:100%;margin:6px 0;padding:8px;font:inherit;background:#1d2b40;color:#e5efff;border:1px solid #445773;border-radius:5px}
+.repository-document{margin-top:16px}
+.repository-document h1{font-size:24px;overflow-wrap:anywhere}
+.repository-document h2{margin-top:24px;border-bottom:1px solid #33425a;padding-bottom:6px}
+.repository-document h3{margin-top:20px}
+.repository-document p{white-space:normal}
+.repository-document pre{padding:10px;background:#101722;border:1px solid #33425a;border-radius:5px;overflow-x:auto;white-space:pre}
+.repository-document :not(pre)>code{background:#263e58;padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
+.repository-document table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:12px}
+.repository-document th,.repository-document td{border:1px solid #445773;padding:6px 8px;text-align:left}
+.repository-document blockquote{margin:12px 0;padding-left:12px;border-left:3px solid #6b94b5;color:#a5b4ca}
+.application-home #breadcrumb{color:#a6b7cd;font-size:12px}
+.system-alternative,.system-exchange{margin:10px 0;padding-left:9px;border-left:3px solid #6b94b5}
+.system-alternative.state-exercised{border-color:#8cdbb0}
+.system-alternative.state-not-observed{border-color:#f5bd81}
+.system-alternative.state-unknown{border-color:#94a3b8}
+.system-home #list button{overflow-wrap:anywhere}
+#canvas>#activity-overview{flex:1;min-height:0}
+.activity-operation{margin:8px 0}

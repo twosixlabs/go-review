@@ -1,0 +1,15 @@
+{
+  "name": "go-review-webui",
+  "private": true,
+  "scripts": {
+    "test": "node --test internal/webui/*_test.js",
+    "vendor:gauges": "cp node_modules/justgage/dist/justgage.umd.js internal/webui/vendor/justgage.umd.js && cp node_modules/justgage/LICENSE internal/webui/vendor/justgage.LICENSE",
+    "vendor:markdown": "cp node_modules/marked/lib/marked.umd.js internal/webui/vendor/marked.umd.js && cp node_modules/marked/LICENSE internal/webui/vendor/marked.LICENSE && cp node_modules/dompurify/dist/purify.min.js internal/webui/vendor/purify.min.js && cp node_modules/dompurify/LICENSE internal/webui/vendor/dompurify.LICENSE && cp node_modules/dompurify/LICENSE-MPL internal/webui/vendor/dompurify.LICENSE-MPL"
+  },
+  "devDependencies": {
+    "justgage": "2.0.1",
+    "marked": "18.1.3",
+    "dompurify": "3.4.17",
+    "jsdom": "26.1.0"
+  }
+}

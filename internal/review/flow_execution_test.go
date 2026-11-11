@@ -1,0 +1,109 @@
+package review
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func flowExecutionFixture(t *testing.T) (*Report, string) {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "executions")
+	t.Setenv("GO_REVIEW_SELECTED_MARKER", marker)
+	r := analyzeOperationSourceFixture(t, map[string]string{
+		"service/service.go": "package service\nfunc Choose(ok bool) int {if ok {return 1}; return 2}\n",
+		"source.go":          "package source\nimport \"example.test/source/service\"\nfunc Run() int {return service.Choose(true)}\n",
+		"source_test.go": `package source
+import ("os";"testing")
+func TestSelected(t *testing.T) {
+	f,err:=os.OpenFile(os.Getenv("GO_REVIEW_SELECTED_MARKER"),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600)
+	if err!=nil {t.Fatal(err)}
+	if _,err=f.WriteString("run\n");err!=nil {t.Fatal(err)}
+	if err=f.Close();err!=nil {t.Fatal(err)}
+	if Run()!=1 {t.Fatal("wrong result")}
+}
+func TestUnselected(t *testing.T) { t.Fatal("unselected sentinel") }
+`}, nil)
+	return r, marker
+}
+
+func TestFlowExecutionRunsExactUnitSelectionOnceWithCrossPackageCoverage(t *testing.T) {
+	r, marker := flowExecutionFixture(t)
+	out := t.TempDir()
+	err := CollectUnitEvidence(context.Background(), r, UnitEvidenceOptions{
+		ArtifactDir: out, Selections: []UnitTestSelection{{Package: r.Module, Tests: []string{"TestSelected"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || string(data) != "run\n" {
+		t.Fatalf("selected test was not run exactly once: %q %v", data, err)
+	}
+	if r.UnitEvidence == nil || len(r.UnitEvidence.Runs) != 1 || r.UnitEvidence.Runs[0].Status != "pass" {
+		t.Fatalf("missing selection provenance: %+v", r.UnitEvidence)
+	}
+	run := r.UnitEvidence.Runs[0]
+	if len(run.MatchedTests) != 1 || run.MatchedTests[0] != "TestSelected" {
+		t.Fatalf("incorrect actual test set: %+v", run)
+	}
+	if _, err = os.Stat(run.EventsPath); err != nil {
+		t.Fatal("test output not retained:", err)
+	}
+	coveredService := false
+	for _, b := range r.Coverage.Blocks {
+		coveredService = coveredService || strings.Contains(b.Path, "/service/") && b.Count > 0
+	}
+	if !coveredService || !r.Coverage.SourceVerified {
+		t.Fatal("selected caller did not collect source-verified cross-package production coverage")
+	}
+	for _, c := range r.Commands {
+		if len(c.Args) == 0 || c.Args[0] != "test" {
+			continue
+		}
+		for _, arg := range c.Args {
+			if strings.Contains(arg, "./...") {
+				t.Fatalf("test collection broadened execution: %+v", c.Args)
+			}
+		}
+	}
+	if r.Trace != nil {
+		t.Fatal("custom recorder is still active")
+	}
+}
+
+func TestFlowExecutionRejectsUnsafeOrMissingSelectionsBeforeExecuting(t *testing.T) {
+	for _, selection := range []UnitTestSelection{
+		{Package: "./...", Tests: []string{"TestSelected"}},
+		{Package: ".", Tests: []string{"TestMissing"}},
+		{Package: ".", Tests: []string{"BenchmarkSelected"}},
+		{Package: ".", Tests: []string{"TestMain"}},
+		{Package: ".", Tests: nil},
+	} {
+		r, marker := flowExecutionFixture(t)
+		if err := CollectUnitEvidence(context.Background(), r, UnitEvidenceOptions{ArtifactDir: t.TempDir(), Selections: []UnitTestSelection{selection}}); err == nil {
+			t.Errorf("invalid selection accepted: %+v", selection)
+		}
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("invalid selection executed tests: %v", err)
+		}
+	}
+}
+
+func TestFlowExecutionRetainsFailedSelectionAsPartialEvidence(t *testing.T) {
+	r, _ := flowExecutionFixture(t)
+	err := CollectUnitEvidence(context.Background(), r, UnitEvidenceOptions{
+		ArtifactDir: t.TempDir(), Selections: []UnitTestSelection{{Package: ".", Tests: []string{"TestSelected", "TestUnselected"}}},
+	})
+	if err == nil {
+		t.Fatal("failed selection was reported as success")
+	}
+	if r.UnitEvidence == nil || r.UnitEvidence.Runs[0].Status != "partial" || r.UnitEvidence.Runs[0].Error == "" {
+		t.Fatalf("failure lost selection-level diagnostics: %+v", r.UnitEvidence)
+	}
+	if r.UnitEvidence.Runs[0].Outcomes[r.Module+"::TestUnselected"] != "fail" {
+		t.Fatal("failed test outcome lost")
+	}
+}

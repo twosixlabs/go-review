@@ -1,0 +1,5 @@
+/bin/
+.work/
+**/testwork/
+/go-review-report/
+/node_modules/
