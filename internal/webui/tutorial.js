@@ -25,6 +25,7 @@ const tutorialNext=button('Next',()=>{
 let tutorialSteps=[],tutorialIndex=0,tutorialReturnFocus=null,tutorialStorageError='';
 
 function tutorialContext() {
+  if(typeof changeState!=='undefined'&&changeState.active)return ['Explore Change Review','Compare pinned Before and After revisions through affected flows, shared implementation and complete supporting changes.','#change-heading'];
   if(!report)return ['Start with a repository','Use Repository & scope to choose a trusted repository. Review runs authorized checks and tests; Analyze only collects static evidence without running target tests.','#workspace-setup'];
   if(mode.documentOpen)return ['Read documentation in context','The reader shows collected project documentation. Return to code or Close details takes you back without losing your code context.','#detail'];
   if(mode.workspacePanel)return ['Inspect review evidence','This reader explains the current review results, applied scope, or analysis limits. Missing and skipped checks are not passing results.','#detail'];
@@ -43,6 +44,12 @@ function tutorialContext() {
 
 function tutorialLessons() {
   const lesson=(title,text,target='#canvas')=>[title,text,target];
+  if(typeof changeState!=='undefined'&&changeState.active)return [
+    lesson('Confirm what is being compared','Resolve committed refs or a PR/MR URL, inspect the pinned commits and confirm static collection. PR/MR only supplies revisions; no comments, approvals or statuses are published.','#change-inputs'),
+    lesson('Start with affected behavior','Select a flow, then an annotated stage or its Changes list. A hidden helper remains reviewable even when the visible diagram has not changed. Before and After are separate source-backed scenes, not an execution trace.','#change-flow'),
+    lesson('Read implementation in context','Shared implementation is counted once across its associated callers. Open retained Before/After source, targeted patch, source witnesses or revision-specific logical/control/data evidence. Other changes and Complete Git inventory retain material with no semantic mapping.','#change-perspectives'),
+    lesson('Track implementation and consequences separately','Reading never marks anything reviewed. Explicit reversible actions affect the displayed item IDs. Flow-context consideration is separate; neither state is an approval or proof of correctness. Chat navigation cannot authorize collection or progress changes.','#change-progress')
+  ];
   if(!report)return [
     lesson('Choose what is allowed to run','Open Repository & scope and enter the repository path. Review collects checks and in-scope unit tests. Analyze only is the choice for static exploration without executing target tests. Saved exclusions and test selections affect later reviews.','#workspace-setup'),
     lesson('Wait for evidence before interpreting it','Review progress names the current stage. After completion, open Review results to distinguish passed checks, failures, and checks that were not run. A diagram alone does not establish that tests passed.','#status'),

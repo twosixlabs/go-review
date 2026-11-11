@@ -69,6 +69,9 @@ func stableID(kind, key string) string { return kind + "-" + digest([]byte(key))
 // Go commands use -mod=readonly and GOTOOLCHAIN=local to avoid manifest rewrites and
 // automatic toolchain downloads. Module downloads and build-cache writes may still occur.
 func Analyze(ctx context.Context, opts Options) (*Report, error) {
+	if len(opts.Environment) > 0 {
+		ctx = context.WithValue(ctx, analysisEnvironmentKey{}, opts.Environment)
+	}
 	scope, scopeErr := resolveScope(opts)
 	if scopeErr != nil {
 		return nil, scopeErr
@@ -318,6 +321,8 @@ func runGo(ctx context.Context, r *Report, dir string, keep bool, args ...string
 	return runCommand(ctx, r, dir, keep, "go", args...)
 }
 
+type analysisEnvironmentKey struct{}
+
 func runCommand(ctx context.Context, r *Report, dir string, keep bool, executable string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
@@ -325,6 +330,11 @@ func runCommand(ctx context.Context, r *Report, dir string, keep bool, executabl
 	boundReviewProcess(cmd)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	if environment, ok := ctx.Value(analysisEnvironmentKey{}).(map[string]string); ok {
+		for key, value := range environment {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr

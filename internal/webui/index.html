@@ -28,7 +28,7 @@
 </section>
 <nav class="workspace-bar" aria-label="Review workspace"><strong>Go Review</strong><select id="review-modules" aria-label="Reviewed Go module" hidden></select><button id="back">← Back</button><input id="search" type="search" aria-label="Find symbols or documentation" placeholder="Find symbol or documentation"><button id="workspace-evidence" aria-pressed="false">Details</button><button id="workspace-chat" aria-expanded="false">Chat</button><button id="workspace-setup" aria-expanded="false">Repository &amp; scope</button><button id="workspace-tools" aria-expanded="false">View options</button></nav>
 <nav class="review-sections" aria-label="Review sections">
-<div role="group" aria-label="Explore structure"><span class="section-label">Explore</span><button id="application">Application</button><button id="system-context">System context</button><button id="system-components">Components &amp; exchanges</button><button id="packages">Packages</button></div>
+<div role="group" aria-label="Explore structure"><span class="section-label">Explore</span><button id="application">Application</button><button id="change-review">Change Review</button><button id="system-context">System context</button><button id="system-components">Components &amp; exchanges</button><button id="packages">Packages</button></div>
 <div role="group" aria-label="Assess code"><span class="section-label">Assess</span><button id="review-map">Review map</button><button id="architecture-signals">Architecture signals</button><button id="hygiene">Checks &amp; hygiene</button></div>
 <div class="review-run" role="group" aria-label="Review evidence"><span class="section-label">Evidence</span><button id="docs">Documentation</button><button id="review-results" type="button" hidden>Review results</button><button id="scope-results" type="button">Applied scope</button><button id="evidence">Analysis limits</button></div>
 </nav>
@@ -67,4 +67,17 @@
 </aside>
 <link rel="stylesheet" href="/chat.css">
 <script src="/chat-tools.js"></script><script src="/chat.js"></script>
+<section id="change-workspace" aria-label="Change Review" hidden>
+<header class="change-header"><h2 id="change-heading">Change Review</h2><button id="change-return" type="button">Return to Application</button><button id="change-setup" type="button">Compare revisions / PR / MR</button><button id="change-back" type="button">Back in Change Review</button></header>
+<p id="change-progress" aria-live="polite"></p><p id="change-notice" role="status"></p>
+<details id="change-provenance"><summary>Scope, provenance and evidence limitations</summary><div id="change-provenance-body"></div></details>
+<details id="change-inputs"><summary>Revision inputs and collection</summary>
+<p>Compare committed revisions without changing your checkout. Go tooling and dependency/export preparation may run; target tests, verification scripts, hooks and applications do not. PR/MR is only a revision source—no approvals, comments or status publishing.</p>
+<form id="change-input-form"><label>Repository <input id="change-directory" required placeholder="/path/to/repository"></label><label>Before <input id="change-before" value="HEAD~1"></label><label>After <input id="change-after" value="HEAD"></label><label>PR/MR URL (optional; reads metadata and fetches into tool-owned storage) <input id="change-provider" type="url" placeholder="https://github.com/owner/repo/pull/42"></label><button type="submit">Resolve revisions</button></form>
+<div id="change-preview"></div><button id="change-confirm" type="button" hidden>Collect these pinned revisions</button><button id="change-cancel" type="button" hidden>Cancel collection</button>
+</details>
+<nav id="change-perspectives" class="change-perspectives" aria-label="Change perspectives"><button data-change-perspective="flows">Affected flows</button><button data-change-perspective="shared">Shared implementation</button><button data-change-perspective="other">Other changes</button><button data-change-perspective="all">All changes</button><button data-change-perspective="files">Complete Git inventory</button><label>Find <input id="change-search" type="search"></label><label>Local state <select id="change-filter"><option value="all">All</option><option value="remaining">Remaining</option><option value="follow-up">Needs follow-up</option><option value="reviewed">Reviewed</option></select></label></nav>
+<div class="change-grid"><aside id="change-list" aria-label="Changed areas"></aside><section id="change-context" aria-label="Revision flow and comparison"><div id="change-flow-tools"></div><div id="change-flow" tabindex="0"></div><div id="change-reader" hidden></div></section><aside id="change-detail" aria-label="Selected change"></aside></div>
+</section>
+<link rel="stylesheet" href="/changes.css"><script src="/change-tools.js"></script><script src="/changes.js"></script>
 </body></html>

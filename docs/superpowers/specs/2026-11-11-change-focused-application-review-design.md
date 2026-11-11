@@ -1,9 +1,13 @@
 # Change-focused Application review
 
-Status: all five design sections approved in conversation; consolidated
-specification awaiting final written review. Design only, not authorization
-to implement. Proposed interfaces remain hypotheses to validate through
-functional implementation.
+Status: all five design sections approved; implementation authorized in
+conversation. The implementation uses a separate `internal/changes` owner,
+shared UI/MCP projections and a distinct Change Review workspace. The task-based
+acceptance criteria below remain the completion checklist, not a claim that
+rendering or unit tests alone establish usability.
+
+Implementation scope update: the latest user direction is desktop-focused.
+Small-screen formatting and narrow-screen layout acceptance are not in scope.
 
 ## Approved relationship map
 

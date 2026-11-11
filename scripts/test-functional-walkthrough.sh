@@ -1,6 +1,9 @@
 #!/bin/sh
 # Verifies source-linked functional operations with controlled fixtures.
-# Args: sources|system|branches|execution|runtime|dataflow|api|ui|frontend|build|backend|all;
+# Args: changes|changes-ui|sources|system|branches|execution|runtime|dataflow|api|ui|frontend|build|backend|all;
+# changes-fixture NEW_ABSOLUTE_DIR retains a controlled Git fixture for real-browser review;
+# changes-portability cross-builds comparison collection/progress for Windows and Linux;
+# changes-acceptance exercises real Git collection through integrated UI and controlled chat;
 # or builder|wasm MODULE_DIR EVIDENCE_DIR for opt-in real-repository acceptance;
 # builder-ui EVIDENCE_DIR reopens it; endpoint-ui SNAPSHOT checks retained entry flows;
 # endpoint-live-ui URL checks the running workbench assets and snapshot in jsdom;
@@ -16,6 +19,24 @@
 set -eu
 cd "$(dirname "$0")/.."
 case "${1:-sources}" in
+  changes-fixture)
+    test "$#" -eq 2 || { echo "changes-fixture requires a new absolute fixture directory" >&2; exit 2; }
+    GO_REVIEW_CHANGE_FIXTURE_DIR="$2" go test ./internal/workbench -run '^TestChangeInteractiveAcceptance$' -count=1
+    ;;
+  changes-portability)
+    GOOS=windows GOARCH=amd64 go build ./internal/changes
+    GOOS=linux GOARCH=amd64 go build ./internal/changes
+    ;;
+  changes-acceptance)
+    go test ./internal/workbench -run '^TestChange.*InteractiveAcceptance$' -count=1 -v
+    ;;
+  changes)
+    go test ./internal/changes ./internal/workbench -run '^TestChange' -count=1
+    node --test internal/webui/change*_test.js
+    ;;
+  changes-ui)
+    node --test internal/webui/change*_test.js
+    ;;
   dataflow)
     go test ./internal/review ./internal/workbench -run '^TestDataFlow' -count=1
     node --test internal/webui/dataflow_test.js
@@ -110,5 +131,5 @@ case "${1:-sources}" in
     mkdir -p .work
     go build -o .work/go-review-functional-check ./cmd/go-review
     ;;
-  *) echo "usage: sh scripts/test-functional-walkthrough.sh [workspace|current-review|current-storage|current-api|current-ui|wasm-review|entries|sources|system|branches|execution|runtime|api|ui|frontend|build|backend|mcp|mcp-build|all] or [builder|wasm MODULE_DIR EVIDENCE_DIR] or [builder-ui|preview|visual-fixtures EVIDENCE_DIR] or [endpoint-ui SNAPSHOT] or [endpoint-live-ui URL] or [mcp-live MCP_URL]" >&2; exit 2 ;;
+  *) echo "usage: sh scripts/test-functional-walkthrough.sh [changes|changes-ui|changes-acceptance|changes-portability|workspace|current-review|current-storage|current-api|current-ui|wasm-review|entries|sources|system|branches|execution|runtime|api|ui|frontend|build|backend|mcp|mcp-build|all] or [changes-fixture NEW_ABSOLUTE_DIR] or [builder|wasm MODULE_DIR EVIDENCE_DIR] or [builder-ui|preview|visual-fixtures EVIDENCE_DIR] or [endpoint-ui SNAPSHOT] or [endpoint-live-ui URL] or [mcp-live MCP_URL]" >&2; exit 2 ;;
 esac

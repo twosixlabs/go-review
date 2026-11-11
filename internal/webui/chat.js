@@ -5,6 +5,16 @@ function chatNotice(text,error=false) {
   $('chat-status').textContent=text;$('chat-status').classList.toggle('error',error);
 }
 function chatContext() {
+  if(typeof changeState!=='undefined'&&changeState.active&&changeState.id) {
+    if(changeState.detailInput)return {kind:'changes',comparisonID:changeState.id,operation:'side',...changeState.detailInput};
+    const flow=changeState.flow,record=changeState.record;
+    const source=changeState.fileID&&!$('change-reader').hidden;
+    return {kind:'changes',comparisonID:changeState.id,operation:source?'source':changeState.inventoryFile?'files':record?'record':flow?'flow':changeState.perspective==='files'?'files':'overview',fileID:source||changeState.inventoryFile?changeState.fileID:undefined,
+      recordID:record?.id,flowID:flow?.id,...(flow?changeSideSnapshot(flow):{}),side:changeState.side,
+      perspective:changeState.perspective==='flows'||changeState.perspective==='files'?'all':changeState.perspective,
+      status:changeState.status,focusPath:changeState.focusPath,focusSymbolID:changeState.focusSymbolID,expandedIDs:changeState.expanded,
+      description:$('change-heading').textContent};
+  }
   const focusPath=[];let parent=mode.parentReview;
   while(parent) {if(parent.flowSymbolID)focusPath.unshift(parent.flowSymbolID);parent=parent.parentReview;}
   const callable=['logical','symbol','dataflow','review'].includes(mode.kind);
@@ -27,6 +37,12 @@ function chatSave() {
 }
 function chatCitations(parent,text,snapshotID) {
   const seen=new Set();
+  for(const match of text.matchAll(/\[(change|change-source):([^\]\n]+)\]/g)) {
+    if(seen.has(match[0]))continue;seen.add(match[0]);
+    const [comparisonID,id,side]=match[2].split('|');
+    const input=match[1]==='change'?{comparisonID,operation:'record',recordID:id}:{comparisonID,operation:'source',fileID:id,side};
+    button('Evidence · '+(side?side+' source':'change'),()=>changeAct(()=>changeNavigate(input)),parent).className='chat-citation';
+  }
   for(const match of text.matchAll(/\[(document|symbol|entry):([^\]\n]+)\]/g)) {
     if(seen.has(match[0]))continue;seen.add(match[0]);
     const [id,evidenceSnapshot]=match[2].split('|');
@@ -68,6 +84,8 @@ const chatToolLabels={review_overview:'Reading application overview',review_flow
   review_search:'Searching retained evidence',review_architecture:'Examining architecture',
   review_assess:'Examining review priorities and signals',review_dataflow:'Tracing retained value dependencies',
   review_results:'Reading repository review results',
+  review_changes:'Reading pinned Change Review evidence',navigate_changes:'Preparing Change Review navigation',
+  propose_change_action:'Preparing a confirmation request',
   recall_evidence:'Recalling earlier evidence',navigate_ui:'Preparing navigation'};
 function chatWorking(item,text) {
   item.activity.hidden=false;item.activity.classList.add('working');
@@ -102,6 +120,10 @@ async function chatLoad() {
   const response=await fetch('/api/chat/status');
   const data=await response.json();
   if(!response.ok)throw Error(data.error||'Unable to load agent status');
+  if(typeof changeState!=='undefined'&&changeState.active&&changeState.id) {
+    if(data.comparison?.id!==changeState.id)throw Error('Comparison changed; reload Change Review before continuing.');
+    data.snapshot={id:'changes:'+data.comparison.id,module:'Change Review',comparisonID:data.comparison.id};
+  }
   chatState.status=data;
   $('chat-model').textContent=data.enabled?data.model+' · '+data.baseURL:'AI disabled';
   $('chat-privacy').textContent=data.external?
@@ -268,7 +290,8 @@ $('chat-form').onsubmit=async event=>{
     $('chat-send').disabled=true;$('chat-stop').disabled=false;$('chat-input').value='';
     chatWorking(assistant,'Working…');
     const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      signal:controller.signal,body:JSON.stringify({message:text,snapshotID:state.snapshot.id,history:prior,
+      signal:controller.signal,body:JSON.stringify({message:text,snapshotID:context.kind==='changes'?undefined:state.snapshot.id,
+        comparisonID:context.comparisonID,history:prior,
         context,allowNavigation})});
     if(!response.ok){const error=await response.json();throw Error(error.error||'Chat HTTP '+response.status);}
     reader=response.body.getReader();
@@ -296,6 +319,18 @@ $('chat-form').onsubmit=async event=>{
           chatActivity(assistant,{tool:message.tool,args:message.args,text:message.text,
             error:message.type==='tool_error',snapshotID:message.args?.snapshotID||state.snapshot.id});
         } else if(message.type==='tool_done')chatWorking(assistant,'Working…');
+        else if(message.type==='change_navigation') {
+          const action=message.args.input;
+          if(allowNavigation&&message.args.automatic){
+            await changeNavigate(action,fingerprint,controller.signal);fingerprint=chatFingerprint();
+          }else button('Show in Change Review',()=>changeAct(()=>changeNavigate(action)),assistant.article);
+        }
+        else if(message.type==='change_proposal') {
+          const proposal=message.args;
+          const disclosure=el('details',undefined,assistant.article);el('summary','Requested local action · '+proposal.action,disclosure);
+          el('pre',JSON.stringify(proposal,null,2),disclosure);
+          button('Review and confirm '+proposal.action,()=>changeAct(()=>changeApplyProposal(proposal)),disclosure);
+        }
         else if(message.type==='navigation') {
           const action=message.navigation;
           if(allowNavigation&&action.automatic) {

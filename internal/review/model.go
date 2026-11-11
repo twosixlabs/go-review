@@ -12,6 +12,8 @@ type Options struct {
 	UnitSelections   []UnitTestSelection
 	ArtifactDir      string
 	Scope            *ReviewScope
+	// Environment pins Go subprocess configuration for isolated revision analysis.
+	Environment map[string]string
 }
 
 // Report is a snapshot: IDs depend on logical source locations, not wall-clock time.

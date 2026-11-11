@@ -10,6 +10,7 @@
   const documentation=load('documentation','GoReviewDocumentation');
   const reviewMap=load('review','GoReviewMap');
   const dataFlow=load('dataflow','GoReviewDataFlow');
+  const logical=load('logical','GoReviewLogical');
 
   const maxResultBytes=32768,pageBytes=6144;
   function byteLength(text) {
@@ -372,6 +373,23 @@
           (d.name+'\n'+t.file.source).toLowerCase().includes(q)).map(d=>
           ({kind:'test',id:d.id,name:d.name,location:d.location})))];
       return page(items,args);
+    }
+    if(operation==='logical') {
+      const owner=(report.symbols||[]).find(s=>s.id===args.symbolID);
+      if(!owner)throw Error('Select retained symbolID for logical relationships');
+      const model=logical.logicalRelationships(report,owner.id);
+      const groups=['crossPackage','samePackage','references','callers'];
+      const sections={};
+      for(const key of groups)sections[key]=model[key].map(g=>({symbol:symbolSummary(g.symbol),callCount:g.calls.length,referenceCount:g.references.length}));
+      sections.boundaries=model.boundaries;sections.conversions=model.conversions;
+      if(args.section==='sites') {
+        const group=groups.flatMap(key=>model[key]).find(g=>g.symbol.id===args.nodeID);
+        if(!group)throw Error('Select a related symbol as nodeID');
+        return page([...group.calls.map(c=>({...c,relationship:'source-call'})),...group.references.map(r=>({...r,relationship:'source-reference'}))],args);
+      }
+      if(args.section){if(!sections[args.section])throw Error('Unknown logical relationship section');return page(sections[args.section],args);}
+      return {symbol:symbolSummary(owner),groups:Object.fromEntries(Object.entries(sections).map(([key,values])=>[key,page(values,args)])),
+        sections:[...Object.keys(sections),'sites'],limitations:['Static local calls and function-value references; references do not establish invocation.']};
     }
     if(operation==='packages') {
       if(!args.package) {

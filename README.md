@@ -3,7 +3,7 @@
 ## Optional review assistant
 
 The **Chat** button opens an evidence-backed assistant. It uses the same
-twelve read-only MCP tools as external reviewers, not filesystem or shell access.
+thirteen read-only MCP tools as external reviewers, not filesystem or shell access.
 Responses distinguish model assessments from collected facts; gauges remain
 measured evidence, not an AI quality score.
 The assistant starts from your question and current view, establishes purpose
@@ -382,6 +382,14 @@ and configuration document IDs. Read those IDs with `review_document`.
 - `review_results`: repository-wide module failures, stages, skipped work and
   scope. Select `stepID` for stage `detail` or `commands`; add `commandIndex` and
   `section: "stdout"` / `"stderr"` for full paged command output.
+- `review_changes`: independent Change Review discovery, complete Git inventory,
+  affected/shared/other changes, inclusion witnesses, correspondences, retained
+  source/patches and local progress. Start with `operation: "overview"`, then
+  preserve `comparisonID`. `operation: "status"` discovers a resolved preview
+  or collection job without starting work. `flow` and `side` additionally require
+  the selected `moduleID`, explicit `side` and that side's `snapshotID`; ordinary
+  Application snapshot IDs are not interchangeable. `side` supports logical,
+  control/call evidence, dataflow, source, document, packages and search.
 
 Chat refreshes evidence for the current view, including selected findings,
 checks, stages and value slices. Its validated navigation can open Review Map,
@@ -696,6 +704,69 @@ After changing the pinned version in `package.json`, regenerate the vendored
 files with `npm install --ignore-scripts` and `npm run vendor:gauges`.
 For an unchanged lockfile use `npm ci --ignore-scripts`. Run frontend tests with
 `npm test` (or `node --test internal/webui/*_test.js` without installing npm dependencies).
+
+## Change Review
+
+Change Review is a desktop workspace; small-screen layouts are not provided.
+
+Choose **Explore → Change Review** to investigate committed changes without
+replacing the current Application selection. Resolve local **Before** and
+**After** refs, or supply a GitHub PR/GitLab MR URL, inspect the pinned commits,
+then explicitly confirm collection. Local refs compare the exact selected
+commits. Provider inputs compare the unique merge base to source head and show
+the target tip separately; they never substitute a synthetic merge result.
+Provider URLs must match the checkout's origin. Existing `gh`/`glab` authentication
+and Git fetch credentials are used; unavailable tools, credentials or objects
+produce errors. No comments, approvals, assignments, checks or statuses are
+published to the Git host.
+
+Start with **Affected flows**, inspect annotated responsibilities, and open
+retained paired Before/After source or a targeted Git patch. **Shared changes**
+shows implementation used by several affected flows. **Other changes** and
+**Complete Git inventory** preserve documentation, tests, configuration,
+dependencies, excluded/inactive sources and unsupported content. Every changed
+item remains accounted for even when semantic association is unavailable.
+HTTP registration and WIT contract witnesses can include changes outside a
+handler. Correspondence is conservative: ambiguous repeated calls/registrations
+are not forced into pairs, and possible reachability is not observed execution.
+Revision-specific logical/control/call/value views never substitute live
+checkout source.
+
+Review marks are explicit, reversible **local tracking**, not correctness
+certification or provider approval. Marking shared implementation reviewed does
+not mark its caller contexts considered. Follow-up remains unfinished.
+Updates apply to displayed item IDs with version checking; another tab's update
+requires refreshing rather than overwriting it. Reading and navigation never
+change progress. Chat uses the same evidence and navigation; collection,
+cancellation and progress proposals require separate host confirmation.
+
+Collection retains raw Git blobs in tool-owned directories without checking out
+either revision. It never runs target tests, repository verification scripts,
+hooks, filters, generators, applications or submodules. This differs deliberately
+from ordinary repository review, where verification scripts are included by
+default. Static Go tooling/export preparation may run and download dependencies.
+CGO and revision workspaces are disabled; the host platform and local Go
+toolchain are recorded. Escaping/absolute or unavailable local replacements are
+rejected instead of consulting unrelated host files. These directories are
+isolation for evidence ownership, not a security sandbox.
+
+Scope, provenance, side/module failures and analysis limits remain inspectable.
+Missing coverage is unknown; collection does not create test measurements.
+Binary/submodule objects, symlink targets, LFS pointers (without downloaded
+payloads), and blobs over the retained 16 MiB limit remain explicit inventory
+records. Oversized content is not loaded for text diffs; retained patch metadata
+explains the limit rather than presenting a complete textual comparison.
+Only one current comparison is published per repository, independently
+of current Application evidence. Failed or canceled replacement preserves the
+last usable comparison; changed evidence never inherits completion silently.
+
+Run controlled comparison checks without analyzing Builder:
+
+```sh
+sh scripts/test-functional-walkthrough.sh changes
+sh scripts/test-functional-walkthrough.sh changes-acceptance
+sh scripts/test-functional-walkthrough.sh changes-portability
+```
 
 ## Evidence boundaries
 

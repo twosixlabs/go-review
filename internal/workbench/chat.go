@@ -54,6 +54,7 @@ type chatEvent struct {
 type chatRequest struct {
 	Message         string                 `json:"message"`
 	SnapshotID      string                 `json:"snapshotID"`
+	ComparisonID    string                 `json:"comparisonID,omitempty"`
 	History         []intelligence.Message `json:"history"`
 	Context         json.RawMessage        `json:"context"`
 	AllowNavigation bool                   `json:"allowNavigation"`
@@ -90,7 +91,13 @@ func (s *Server) chatStatus(w http.ResponseWriter, r *http.Request) {
 		catalog = snapshots
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"enabled": cfg.Enabled, "baseURL": cfg.BaseURL, "model": cfg.Model, "external": cfg.External(), "snapshot": info, "snapshots": catalog})
+	s.mu.RLock()
+	var comparison any
+	if s.comparison != nil {
+		comparison = map[string]any{"id": s.comparison.ID, "revisions": s.comparison.Revisions}
+	}
+	s.mu.RUnlock()
+	_ = json.NewEncoder(w).Encode(map[string]any{"enabled": cfg.Enabled, "baseURL": cfg.BaseURL, "model": cfg.Model, "external": cfg.External(), "snapshot": info, "snapshots": catalog, "comparison": comparison})
 }
 
 // Navigation validates retained identifiers through the same query engine as MCP.
@@ -292,8 +299,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, fmt.Sprintf("invalid chat request: %v", err))
 		return
 	}
-	if strings.TrimSpace(request.Message) == "" || len(request.Message) > 16000 || request.SnapshotID == "" {
-		failure(w, 400, "message (1-16000 bytes) and snapshotID required; chat request is limited to 4 MiB")
+	if strings.TrimSpace(request.Message) == "" || len(request.Message) > 16000 || (request.SnapshotID == "" && request.ComparisonID == "") {
+		failure(w, 400, "message (1-16000 bytes) and snapshotID or comparisonID required; chat request is limited to 4 MiB")
 		return
 	}
 	for _, message := range request.History {
@@ -303,7 +310,13 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	service := s.newChatService()
-	snapshot, _, err := service.snapshot(request.SnapshotID, "")
+	var snapshot *querySnapshot
+	var err error
+	if request.ComparisonID != "" {
+		_, err = s.currentComparison(request.ComparisonID)
+	} else {
+		snapshot, _, err = service.snapshot(request.SnapshotID, "")
+	}
 	if err != nil {
 		failure(w, 409, err.Error())
 		return
@@ -365,6 +378,9 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 		allowed[tool.Name] = true
 	}
 	tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "navigate_ui", Description: "Propose or perform a validated workbench navigation. Permission is controlled by the user outside your arguments. Does not read evidence or execute code.", Parameters: navigateSchema}})
+	tools = append(tools,
+		intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "navigate_changes", Description: "Navigate pinned Change Review evidence; never collects or changes local progress. Uses host navigation permission.", Parameters: navigateChangesSchema}},
+		intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "propose_change_action", Description: "Propose resolve/fetch, collect, cancel or local progress action. Does not execute; requires separate explicit human confirmation in the host.", Parameters: changeProposalSchema}})
 	tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "recall_evidence",
 		Description: "Read exact evidence archived earlier in this turn. Follow nextOffset for more text.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"archiveID":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["archiveID"],"additionalProperties":false}`)}})
@@ -372,14 +388,36 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	if contextText == "" {
 		contextText = "{}"
 	}
-	messages := []intelligence.Message{{Role: "system", Content: agentInstructions + "\nInitial snapshotID: " + snapshot.info.ID + "\nInitial conversation module: " + snapshot.info.Module +
+	evidenceContext := "\nInitial comparisonID: " + request.ComparisonID + "\nUse review_changes for pinned comparison evidence. Before/After snapshots are not ordinary Application snapshots."
+	if snapshot != nil {
+		evidenceContext = "\nInitial snapshotID: " + snapshot.info.ID + "\nInitial conversation module: " + snapshot.info.Module
+	}
+	messages := []intelligence.Message{{Role: "system", Content: agentInstructions + changeAgentInstructions + evidenceContext +
 		"\nNavigation authorized this turn: " + fmt.Sprint(request.AllowNavigation) + "\nCurrent UI context: " + contextText}}
 	messages = append(messages, request.History...)
 	messages = append(messages, intelligence.Message{Role: "user", Content: request.Message})
 	// Text-only browser history intentionally contains no trusted tool results.
 	// Refresh the actual visible context through MCP every turn, so an earlier
 	// model claim cannot stand in for retained evidence or occurrence IDs.
-	refreshName, refreshArgs, err := chatRefresh(snapshot.info, request.Context)
+	refreshName := "review_changes"
+	refreshArgs := map[string]any{"comparisonID": request.ComparisonID, "operation": "overview"}
+	if snapshot != nil {
+		refreshName, refreshArgs, err = chatRefresh(snapshot.info, request.Context)
+	} else if len(request.Context) > 0 {
+		var input changeQueryInput
+		err = json.Unmarshal(request.Context, &input)
+		input.ComparisonID = request.ComparisonID
+		if input.Operation == "" {
+			input.Operation = "overview"
+		}
+		if err == nil {
+			var encoded []byte
+			encoded, err = json.Marshal(input)
+			if err == nil {
+				err = json.Unmarshal(encoded, &refreshArgs)
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -465,7 +503,7 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 				return fmt.Errorf("invalid arguments for %s", call.Function.Name)
 			}
 			name := call.Function.Name
-			if name != "navigate_ui" && name != "recall_evidence" && !allowed[name] {
+			if name != "navigate_ui" && name != "navigate_changes" && name != "propose_change_action" && name != "recall_evidence" && !allowed[name] {
 				return fmt.Errorf("model requested unavailable tool %q", name)
 			}
 			if err := emit(chatEvent{Type: "tool", Tool: name, Args: args}); err != nil {
@@ -473,15 +511,60 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 			}
 			var output any
 			var toolErr error
-			if _, _, err := service.snapshot(snapshot.info.ID, ""); err != nil {
-				return err
+			if snapshot != nil {
+				if _, _, err := service.snapshot(snapshot.info.ID, ""); err != nil {
+					return err
+				}
 			}
-			if name == "navigate_ui" {
+			if request.ComparisonID != "" {
+				if _, err := s.currentComparison(request.ComparisonID); err != nil {
+					return err
+				}
+			}
+			if name == "navigate_changes" {
+				var input changeQueryInput
+				d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
+				d.DisallowUnknownFields()
+				if toolErr = d.Decode(&input); toolErr == nil {
+					switch input.Operation {
+					case "overview", "records", "files", "flows", "record", "source", "flow", "side":
+					default:
+						toolErr = fmt.Errorf("unsupported comparison navigation")
+					}
+					if input.ComparisonID == "" {
+						toolErr = fmt.Errorf("comparison navigation requires pinned comparisonID")
+					}
+				}
+				if toolErr == nil {
+					_, toolErr = s.queryChanges(ctx, input)
+					if toolErr == nil {
+						if err := emit(chatEvent{Type: "change_navigation", Args: map[string]any{"input": input, "automatic": request.AllowNavigation}}); err != nil {
+							return err
+						}
+						output = map[string]any{"status": "validated comparison navigation dispatched; await browser context to confirm", "automatic": request.AllowNavigation}
+					}
+				}
+			} else if name == "propose_change_action" {
+				var proposal changeProposal
+				d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
+				d.DisallowUnknownFields()
+				if toolErr = d.Decode(&proposal); toolErr == nil {
+					toolErr = s.validateChangeProposal(ctx, proposal)
+				}
+				if toolErr == nil {
+					if err := emit(chatEvent{Type: "change_proposal", Args: proposal}); err != nil {
+						return err
+					}
+					output = map[string]string{"status": "proposal only; not executed. Separate human confirmation is required."}
+				}
+			} else if name == "navigate_ui" {
 				var nav navigation
 				d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
 				d.DisallowUnknownFields()
 				if err := d.Decode(&nav); err != nil {
 					toolErr = err
+				} else if snapshot == nil {
+					toolErr = fmt.Errorf("ordinary Application navigation requires an ordinary snapshot; use comparison navigation")
 				} else {
 					target := snapshot
 					if nav.Module != "" {
@@ -511,7 +594,13 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 					output, toolErr = memory.read(recall.ArchiveID, recall.Offset)
 				}
 			} else {
-				if name == "review_overview" {
+				if name == "review_changes" {
+					if _, ok := args["comparisonID"]; !ok && request.ComparisonID != "" {
+						args["comparisonID"] = request.ComparisonID
+					}
+				} else if snapshot == nil {
+					toolErr = fmt.Errorf("ordinary Application evidence is unavailable; use review_changes with explicit comparison side/module identities")
+				} else if name == "review_overview" {
 					module, _ := args["module"].(string)
 					if module == "" {
 						args["module"] = snapshot.info.Module

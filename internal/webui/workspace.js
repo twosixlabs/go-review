@@ -154,14 +154,13 @@ function workspaceInspector() {
 }
 
 function workspaceNavigation() {
-  const current=mode.documentOpen?'docs':mode.kind==='review'?'review-map':['application','endpoint'].includes(mode.kind)?'application':mode.kind==='packages'||mode.kind==='package'?'packages':
+  const current=typeof changeState!=='undefined'&&changeState.active?'change-review':mode.documentOpen?'docs':mode.kind==='review'?'review-map':['application','endpoint'].includes(mode.kind)?'application':mode.kind==='packages'||mode.kind==='package'?'packages':
     mode.kind==='system-flow'?(mode.level==='context'?'system-context':'system-components'):
     mode.kind==='signals'?(mode.section==='hygiene'?'hygiene':'architecture-signals'):null;
   for(const b of document.querySelectorAll('.review-sections button')) {
     if(b.id===current)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');
   }
-  if(!['application','endpoint'].includes(mode.kind)||mode.documentOpen)
-    $('application').setAttribute('aria-pressed','false');
+  $('application').setAttribute('aria-pressed',String(current==='application'));
   $('back').disabled=history.length===0;
   $('workspace-evidence').setAttribute('aria-pressed',String(document.body.classList.contains('review-inspector-open')));
 }

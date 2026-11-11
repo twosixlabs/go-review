@@ -46,6 +46,9 @@ func summarizeRun(run *review.RepositoryReview) *runSummary {
 func NewReviewed(run *review.RepositoryReview) *Server {
 	s := New(nil)
 	s.review = run
+	if err := s.reopenComparison(run.Root); err != nil {
+		s.changeError = "reopen comparison: " + err.Error()
+	}
 	for _, m := range run.Modules {
 		review.PrepareRecordedObservations(m.Report)
 		review.PrepareSystemFlow(m.Report)

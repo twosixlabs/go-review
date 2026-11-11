@@ -11,25 +11,39 @@ import (
 	"sync"
 	"time"
 
+	"github.com/russellbrasser/go-review/internal/changes"
 	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/review"
 	"github.com/russellbrasser/go-review/internal/webui"
 )
 
 type Server struct {
-	mu            sync.RWMutex
-	collect       sync.Mutex
-	report        *review.Report
-	review        *review.RepositoryReview
-	progress      review.ReviewProgress
-	reviewRunning bool
-	reviewError   string
-	agent         intelligence.Config
+	mu              sync.RWMutex
+	collect         sync.Mutex
+	report          *review.Report
+	review          *review.RepositoryReview
+	progress        review.ReviewProgress
+	reviewRunning   bool
+	reviewError     string
+	agent           intelligence.Config
+	comparison      *changes.Comparison
+	changePreview   *changes.Resolved
+	changePreviewID string
+	changeScope     review.ReviewScope
+	changeJob       *changeJob
+	changeError     string
+	changeClosed    bool
 }
 
 func New(report *review.Report) *Server {
 	review.PrepareSystemFlow(report)
-	return &Server{report: report}
+	s := &Server{report: report}
+	if report != nil && report.Root != "" {
+		if err := s.reopenComparison(report.Root); err != nil {
+			s.changeError = "reopen comparison: " + err.Error()
+		}
+	}
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -46,6 +60,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/review/scope", s.reviewScope)
 	mux.HandleFunc("/api/chat/status", s.chatStatus)
 	mux.HandleFunc("/api/chat", s.chat)
+	mux.HandleFunc("/api/changes/query", s.changesQuery)
+	mux.HandleFunc("/api/changes/state", s.changesState)
+	mux.HandleFunc("/api/changes/resolve", s.changesResolve)
+	mux.HandleFunc("/api/changes/collect", s.changesCollect)
+	mux.HandleFunc("/api/changes/cancel", s.changesCancel)
+	mux.HandleFunc("/api/changes", s.changesStatus)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
