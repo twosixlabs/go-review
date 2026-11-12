@@ -526,6 +526,13 @@ control/data flow and recorded statement coverage. An external provider requires
 explicit approval to send this evidence. Assessment does not execute target
 tests, run the application, edit files or automatically collect newer evidence.
 
+![Test Quality workspace showing an illustrative assessment, scope counts, rubric scores, and function ratings](docs/images/test-quality-overview.png)
+
+*Illustrative example data, not a real model assessment.* Use **Start project
+assessment** to launch a review, and the saved-assessment selector to reopen
+results. The score cards and scope counts distinguish partial results from
+fully assessed functions.
+
 The assessment runs in the background. Continue exploring or chatting; return
 through **Test Quality** to monitor progress or **Cancel assessment**. Closing
 the browser does not cancel the job while Go Review remains running. Shutdown
@@ -543,6 +550,11 @@ Browse modules/packages, functions and findings, then open cited production
 and test lines to inspect individual cases and assertions. Statement blocks,
 test-run scope and behavior evidence are available alongside the judgment.
 Aggregate coverage does not identify which individual case exercised a path.
+
+![Illustrative cited test source with controls to read preceding and following context](docs/images/test-quality-source.png)
+
+Select a citation beside a rating or finding to open the pinned source; use
+**Read preceding context** and **Read following context** to inspect nearby lines.
 Saved assessments reopen from their pinned evidence without a model call or
 the original checkout. Chat and `review_test_quality` expose the same saved
 results. [Test Quality reference](docs/reference.md#ai-test-quality).
