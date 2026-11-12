@@ -15,6 +15,7 @@ import (
 //go:embed chat.js chat-tools.js chat.css
 //go:embed workspace.js workspace.css
 //go:embed tutorial.js tutorial.css
+//go:embed test-quality.js test-quality.css
 var assets embed.FS
 
 func Handler() http.Handler {

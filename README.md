@@ -22,6 +22,7 @@ an overall quality score.*
 - [Assess where to investigate](#assess-where-to-investigate)
 - [Read documentation and collection results](#read-documentation-and-collection-results)
 - [Review committed changes](#review-committed-changes)
+- [Assess unit-test quality](#assess-unit-test-quality)
 - [Use the optional assistant](#use-the-optional-assistant)
 - [Connect an MCP client](#connect-an-mcp-client)
 - [Troubleshooting](#troubleshooting)
@@ -161,6 +162,9 @@ There is **one current review per repository**, not a permanent run history.
 A completed replacement prunes superseded evidence. Analyze only does not
 preserve old execution measurements as though they belonged to its new snapshot.
 Change Review has its own current comparison and evidence-bound local progress.
+Explicit AI test-quality assessments retain independent source/evidence copies
+under `go-review/test-quality` in the OS user cache. Replacing the current review
+does not delete these saved assessments.
 
 ## Find your way around
 
@@ -172,7 +176,7 @@ The toolbar and three navigation groups stay available as you explore:
 | **Back** and breadcrumbs | Return to your previous context or a named ancestor |
 | **Find symbol or documentation** | Search names, receiver methods, source text and collected documents |
 | **Explore** | Application entries, committed changes, architecture, and package structure |
-| **Assess** | Compare measurements, inspect architecture findings, and read check diagnostics |
+| **Assess** | Compare measurements, assess unit-test quality with optional AI, inspect architecture findings, and read check diagnostics |
 | **Evidence** | Read documentation, collection results, applied exclusions and analysis limits |
 | **Function views** | Logical flow, Control flow, Data flow and Call relationships for a selected function |
 | **Details** | Open or close selected evidence; documents and diagnostics use a wider reader |
@@ -512,6 +516,36 @@ The checkout is not modified, and no host-specific CLI or API is used.
 No approvals, comments, assignments or statuses are published.
 Binary, symlink, submodule, LFS-pointer and oversized items remain inventoried
 with explicit evidence limits. [Change Review reference](docs/reference.md#change-review).
+
+## Assess unit-test quality
+
+Choose **Assess → Test Quality**, then **Start project assessment**. This uses
+the [configured assistant provider](#configure-a-model) to review retained
+production source, actual test assertions, helpers/mocks, relevant input cases,
+control/data flow and recorded statement coverage. An external provider requires
+explicit approval to send this evidence. Assessment does not execute target
+tests, run the application, edit files or automatically collect newer evidence.
+
+The assessment runs in the background. Continue exploring or chatting; return
+through **Test Quality** to monitor progress or **Cancel assessment**. Closing
+the browser does not cancel the job while Go Review remains running. Shutdown
+cancels active work and retains completed results; an interrupted assessment is
+not silently restarted.
+
+The displayed **AI-assessed score** is not measured coverage or a correctness
+certification. Its visible rubric rates assertion strength, representative
+cases, and behavior/path testing from 0–4. A function's score is 25 times its
+mean applicable rating; the project score equally weights scored functions.
+Insufficient and unreviewed evidence are **unknown, not zero**. Scope counts
+always accompany the score, including partial assessments.
+
+Browse modules/packages, functions and findings, then open cited production
+and test lines to inspect individual cases and assertions. Statement blocks,
+test-run scope and behavior evidence are available alongside the judgment.
+Aggregate coverage does not identify which individual case exercised a path.
+Saved assessments reopen from their pinned evidence without a model call or
+the original checkout. Chat and `review_test_quality` expose the same saved
+results. [Test Quality reference](docs/reference.md#ai-test-quality).
 
 ## Use the optional assistant
 

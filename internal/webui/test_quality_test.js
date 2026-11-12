@@ -1,0 +1,90 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const {JSDOM}=require('jsdom');
+
+test('Test Quality launches explicitly, retains background context and drills into actual cited source',async()=>{
+  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090'});
+  const requests=[];
+  const report={root:'/repo',module:'app',sourceSHA256:'ordinary',packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]};
+  const identity={snapshotID:'pinned',module:'app',symbolID:'F'};
+  const summary={score:75,counts:{scored:1,unreviewed:0,insufficient:0,excluded:0},partial:false};
+  let running=false,exists=false,external=false;
+  dom.window.fetch=async(url,options)=>{
+    const args=options?.body?JSON.parse(options.body):{};
+    requests.push({url,args});
+    let value;
+    if(url==='/api/snapshot')value=report;
+    else if(url==='/api/review')value={running:false,run:null};
+    else if(url==='/api/chat/status')value={enabled:true,external,baseURL:'http://localhost:9000',model:'test',snapshot:{id:'ordinary'}};
+    else if(url==='/api/test-quality/start'){exists=true;running=true;value={id:'assessment',status:'running'};}
+    else if(url==='/api/test-quality/status')value={assessments:exists?[{id:'assessment',status:running?'running':'completed',summary}]:[]};
+    else if(args.operation==='overview')value={assessmentID:'assessment',status:running?'running':'completed',version:'test-quality/1',model:'test',summary,categories:{'assertion-strength':75},limitations:['Statement coverage is not assertion quality.'],moduleCount:1};
+    else if(args.operation==='modules')value={items:[{...identity,package:'app/service',summary,findings:1}],nextOffset:null,total:1};
+    else if(args.operation==='responsibilities')value={items:[{identity,name:'F',package:'app/service',status:'scored',summary,findingCount:1}],nextOffset:null,total:1};
+    else if(args.operation==='responsibility')value={identity,name:'F',status:'scored',ratings:[{dimension:'assertion-strength',state:'assessed',value:3,rationale:'Checks outputs',evidence:[{snapshotID:'pinned',fileID:'test',startLine:3,endLine:3}]}],
+      findings:[{category:'reliability',kind:'inference',title:'Shared mutable fixture',rationale:'State is reused',consequence:'Order dependency',suggestion:'Reset fixture',evidence:[{snapshotID:'pinned',fileID:'test',startLine:3,endLine:3}]}]};
+    else if(args.operation==='source')value={path:'f_test.go',sha256:'hash',startLine:3,endLine:3,totalLines:3,text:'assert.Equal(t, "<img onerror=alert(1)>", F())'};
+    else if(args.operation==='evidence'&&args.evidenceOperation==='coverage')value={blocks:{items:[{startLine:args.args.offset?8:2,count:0}],nextOffset:args.args.offset?null:1}};
+    else value={};
+    return {ok:true,json:async()=>value};
+  };
+  try{
+    const ctx=dom.getInternalVMContext();
+    for(const match of html.matchAll(/<script src="\/([^"]+)"><\/script>/g))
+      vm.runInContext(fs.readFileSync(path.join(__dirname,match[1]),'utf8'),ctx,{filename:match[1]});
+    await new Promise(resolve=>setImmediate(resolve));
+    const before=vm.runInContext('JSON.stringify({report,mode})',ctx);
+    const nav=dom.window.document.querySelector('#test-quality');
+    assert.ok(nav,'dedicated top-level view is missing');
+    await vm.runInContext('qualityOpen()',ctx);
+    assert.equal(requests.some(r=>r.url==='/api/test-quality/start'),false,'opening view must not launch AI');
+    assert.equal(dom.window.document.querySelector('#test-quality-workspace').hidden,false);
+    await dom.window.document.querySelector('#quality-start').onclick();
+    assert.equal(requests.filter(r=>r.url==='/api/test-quality/start').length,1);
+    vm.runInContext('qualityClose()',ctx);
+    assert.equal(vm.runInContext('JSON.stringify({report,mode})',ctx),before,'assessment overwrote Application state');
+    assert.equal(requests.some(r=>r.url==='/api/test-quality/cancel'),false,'navigation cancelled background work');
+    await vm.runInContext('qualityOpen()',ctx);
+    await vm.runInContext("qualityPackages()",ctx);
+    const pkg=dom.window.document.querySelector('#quality-packages button');
+    await pkg.onclick();
+    const fn=dom.window.document.querySelector('#quality-functions button');
+    await fn.onclick();
+    assert.equal(vm.runInContext('chatContext().assessmentID',ctx),'assessment');
+    assert.equal(vm.runInContext('chatContext().symbolID',ctx),'F');
+    assert.match(dom.window.document.querySelector('#quality-detail').textContent,/Checks outputs.*Order dependency.*Reset fixture/);
+    const cite=dom.window.document.querySelector('#quality-detail .quality-citation');
+    await cite.onclick();
+    assert.match(dom.window.document.querySelector('#quality-source').textContent,/f_test.go.*assert.Equal/s);
+    assert.equal(dom.window.document.querySelector('#quality-source img'),null,'source became executable HTML');
+    const coverage=[...dom.window.document.querySelectorAll('#quality-detail button')].find(b=>/statement blocks/.test(b.textContent));
+    await coverage.onclick();
+    const more=[...dom.window.document.querySelectorAll('#quality-detail button')].find(b=>/More evidence/.test(b.textContent));
+    assert.ok(more,'coverage pagination is inaccessible in the evidence reader');
+    await more.onclick();
+    assert.equal(requests.filter(r=>r.args.evidenceOperation==='coverage').at(-1).args.args.offset,1);
+    running=false;
+    await vm.runInContext('qualityPoll()',ctx);
+    assert.match(dom.window.document.querySelector('#quality-detail').textContent,/Shared mutable fixture/,'progress refresh discarded selected detail');
+    const fingerprint=vm.runInContext('chatFingerprint()',ctx);
+    vm.runInContext('qualityClose()',ctx);
+    await assert.rejects(vm.runInContext(`qualityNavigate({assessmentID:'assessment',operation:'overview'},${JSON.stringify(fingerprint)})`,ctx),/changed manually/);
+    assert.equal(requests.some(r=>/unit-tests|analyze|changes\/collect/.test(r.url)),false);
+    external=true;
+    await vm.runInContext('qualityOpen()',ctx);
+    await dom.window.document.querySelector('#quality-start').onclick();
+    assert.equal(requests.filter(r=>r.url==='/api/test-quality/start').length,1,'external source transfer was not gated');
+    dom.window.document.querySelector('#quality-consent').checked=true;
+    await dom.window.document.querySelector('#quality-start').onclick();
+    assert.equal(requests.filter(r=>r.url==='/api/test-quality/start').at(-1).args.confirmExternal,true);
+    vm.runInContext("qualityClose();go({kind:'application'})",ctx);
+    await new Promise(resolve=>setImmediate(resolve));
+    const overviewLink=dom.window.document.querySelector('.quality-overview-link');
+    assert.ok(overviewLink,'Application overview does not link to saved AI test-quality assessment');
+    assert.match(overviewLink.textContent,/AI.*75\.0/);
+  }finally{dom.window.close();}
+});

@@ -1,0 +1,24 @@
+#test-quality-workspace { margin: 8px 18px 24px; min-height: 65vh; }
+#test-quality-workspace[hidden] { display: none; }
+body.test-quality-open { height: auto; overflow: auto; min-height: 100dvh; }
+body.test-quality-open main,body.test-quality-open .function-views,body.test-quality-open #advanced-tools { display: none; }
+body.test-quality-open.chat-open #test-quality-workspace { margin-right: clamp(380px,32vw,620px); }
+.quality-heading,.quality-actions { display: flex; align-items: center; gap: 12px; }
+.quality-heading h2 { margin-right: auto; }
+.quality-heading small { font-size: .75rem; font-weight: normal; }
+.quality-actions label { display: flex; gap: 8px; align-items: center; }
+#quality-overview { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; }
+.quality-score { border: 1px solid #7691a8; border-radius: 6px; padding: 12px; min-width: 150px; }
+.quality-score strong { font-size: 1.65rem; display: block; }
+.quality-grid { display: grid; grid-template-columns: minmax(210px,22%) minmax(230px,26%) minmax(0,1fr); gap: 14px; margin-top: 16px; }
+.quality-grid > * { min-width: 0; border: 1px solid #869cad; padding: 12px; max-height: 70vh; overflow: auto; }
+#quality-packages > button,#quality-functions > button { display: block; width: 100%; text-align: left; margin: 6px 0; overflow-wrap: anywhere; }
+.quality-grid h3 { margin-top: 0; }
+#quality-source pre { overflow: auto; max-height: 65vh; padding: 12px; background: #102334; color: #e9f2f8; line-height: 1.5; }
+#quality-source { overflow-wrap: anywhere; }
+#quality-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
+.quality-citation { margin: 4px; font-size: .8rem; }
+#quality-rubric { padding: 10px; border: 1px solid #869cad; }
+#quality-notice.error { color: #b93030; }
+#test-quality-workspace button:focus-visible { outline: 3px solid #176aaf; outline-offset: 2px; }
+.quality-overview-link { border-style: dashed; }

@@ -154,7 +154,7 @@ function workspaceInspector() {
 }
 
 function workspaceNavigation() {
-  const current=typeof changeState!=='undefined'&&changeState.active?'change-review':mode.documentOpen?'docs':mode.kind==='review'?'review-map':['application','endpoint'].includes(mode.kind)?'application':mode.kind==='packages'||mode.kind==='package'?'packages':
+  const current=typeof qualityState!=='undefined'&&qualityState.active?'test-quality':typeof changeState!=='undefined'&&changeState.active?'change-review':mode.documentOpen?'docs':mode.kind==='review'?'review-map':['application','endpoint'].includes(mode.kind)?'application':mode.kind==='packages'||mode.kind==='package'?'packages':
     mode.kind==='system-flow'?(mode.level==='context'?'system-context':'system-components'):
     mode.kind==='signals'?(mode.section==='hygiene'?'hygiene':'architecture-signals'):null;
   for(const b of document.querySelectorAll('.review-sections button')) {

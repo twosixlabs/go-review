@@ -8,7 +8,7 @@ Shell commands on this page assume the repository root as the working directory.
 ## Optional review assistant
 
 The **Chat** button opens an evidence-backed assistant. It uses the same
-thirteen read-only MCP tools as external reviewers, not filesystem or shell access.
+read-only MCP tools as external reviewers, not filesystem or shell access.
 Responses distinguish model assessments from collected facts; gauges remain
 measured evidence, not an AI quality score.
 The assistant starts from your question and current view, establishes purpose
@@ -709,6 +709,105 @@ After changing the pinned version in `package.json`, regenerate the vendored
 files with `npm install --ignore-scripts` and `npm run vendor:gauges`.
 For an unchanged lockfile use `npm ci --ignore-scripts`. Run frontend tests with
 `npm test` (or `node --test internal/webui/*_test.js` without installing npm dependencies).
+
+## AI Test Quality
+
+**Assess → Test Quality** is a separately launched, project-wide background AI
+review. It uses the existing assistant configuration and provider transport;
+AI-disabled browsing and saved-result access do not require a provider.
+External-provider launches require explicit source/evidence-transfer consent.
+Credentials are not stored in assessments.
+
+At launch the host pins all included module reports, production/test/helper
+source, coverage and referenced execution artifacts into independent private
+storage under the OS user cache, `go-review/test-quality`. Source/report and
+artifact hashes are verified on reload. Replacing the current repository review
+cannot invalidate these copies. Each assessment records the provider/model,
+rubric version, snapshot-qualified function identities and timestamps.
+
+The host processes one assessment at a time with at most two waiting jobs.
+Duplicate starts against the same retained review return its active job.
+Provider settings and source snapshots are fixed at launch. Navigation, module
+selection and chat cannot change or cancel that work. **Cancel assessment**
+stops provider work and preserves completed function results. Graceful shutdown
+cancels and waits; after an unexpected stop, unfinished saved jobs are marked
+**interrupted**, never automatically resumed or sent back to a model.
+
+### Rubric and scope
+
+Rubric `test-quality/1` uses these equally weighted dimensions:
+
+| Dimension | Assesses |
+|---|---|
+| Assertion strength | Checks on observable outputs, errors, state and meaningful effects, rather than invocation alone |
+| Representative cases | Relevant normal, boundary, invalid-input and state partitions, not arbitrary case counts |
+| Behavior paths | Important production responsibilities and alternatives in light of source and recorded execution |
+
+Ratings are integers: **0** absent/ineffective, **1** weak with major gaps,
+**2** meaningful with material gaps, **3** strong with limited gaps,
+**4** convincing and proportionate. Each requires rationale and read-source
+citations. Inapplicable dimensions need a rationale and no value. Unknown
+applicable evidence prevents a function score; it is not assigned zero.
+
+`function score = 25 × mean applicable rating`; the project score is the equal
+mean of scored function scores. The population consists of distinct retained
+production function/method declarations qualified by snapshot, module and symbol;
+closures contribute to their enclosing declaration. Bodyless/unavailable
+declarations remain counted as insufficient. Recorded collection exclusions
+remain visible through retained evidence; declarations removed by that scope
+are not reconstructed or counted as reviewed.
+
+The view shows scored, insufficient, excluded and unreviewed counts, category
+scores, unavailable modules, and partial/cancelled/interrupted state. No scored
+functions means an unavailable score. Reliability/design findings include
+isolation, shared state, nondeterminism, brittle coupling, misleading names,
+mock misuse and swallowed failures when supported by evidence.
+
+All ratings/findings are **AI judgments**, distinct from collected facts.
+Coverage measures statements in a particular run; aggregate profiles do not
+establish which individual case exercised a path. Unverified source freshness,
+failed/partial execution, missing coverage and scope limitations must inform
+the judgment. Scores are not statistically calibrated and must not be compared
+as objective measurements across different models, snapshots or scopes.
+
+### Evidence and interfaces
+
+Drill down through package/function membership, ratings and findings to cited
+test cases, assertions and production lines. The evidence reader also exposes
+retained file catalogs, statement blocks, test-run metadata, control-flow and
+data-flow evidence. Large sources have preceding/following context controls.
+Opening results never reads a changed live checkout or invokes a model.
+
+HTTP endpoints:
+
+- `POST /api/test-quality/start` with `confirmExternal` when required.
+- `GET /api/test-quality/status` for saved jobs and current progress.
+- `POST /api/test-quality/cancel` with `assessmentID`.
+- `POST /api/test-quality/query` for read-only retained results.
+
+The read-only MCP tool **`review_test_quality`** uses that same query projection.
+Start with `operation: "assessments"` to discover IDs for the current project;
+preserve the chosen `assessmentID`. Operations:
+
+- `overview`: score, rubric version, scope and provenance.
+- `modules`, `responsibilities`, `findings`, `unavailable`: paged membership;
+  use `offset`/`limit` (1–100) and follow `nextOffset`.
+- `responsibility`, `finding`: qualified `snapshotID` and `symbolID`;
+  `findingIndex` selects a finding.
+- `source`: qualified `snapshotID`, `fileID`, `startLine`/`endLine`;
+  at most 500 lines and 24,000 source bytes per request.
+- `evidence`: `snapshotID`, `evidenceOperation` and `args`; operations include
+  `catalog`, `source`, `coverage`, `search`, `evidence`, `dataflow`, `logical`,
+  `document`, and `packages`. `coverage` takes `symbolID` and pagination;
+  shared evidence operations return available sections and continuation cursors.
+
+Result queries are bounded to 32 KiB; request smaller pages/ranges when needed.
+Assessment snapshot IDs belong to the archive and are not interchangeable with
+current Application snapshot IDs. Chat refreshes the selected saved assessment,
+function or cited source every turn, and can propose validated navigation.
+These read-only tools cannot launch assessment, execute tests or mutate source.
+Provider/protocol/budget failures remain explicit, with completed work retained
+and affected functions marked insufficient.
 
 ## Change Review
 

@@ -134,6 +134,9 @@ func main() {
 		if err := work.ShutdownChanges(shutdown); err != nil {
 			log.Printf("stop comparison collection: %v", err)
 		}
+		if err := work.ShutdownTestQuality(shutdown); err != nil {
+			log.Printf("stop test quality assessment: %v", err)
+		}
 		if err := server.Shutdown(shutdown); err != nil {
 			log.Printf("stop review server: %v", err)
 		}

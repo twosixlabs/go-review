@@ -23,6 +23,7 @@ async function changeNavigate(input,expectedFingerprint,signal) {
   const response=await fetch('/api/changes/query',{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
   const evidence=await response.json();if(!response.ok)throw Error(evidence.error||'Comparison navigation unavailable');
   check();
+  if(typeof qualityState!=='undefined'&&qualityState.active)qualityClose();
   if(input.comparisonID!==changeState.id){
     const status=await changeRequest('/api/changes');check();
     if(status.comparisonID!==input.comparisonID)throw Error('Comparison changed; stale navigation rejected');

@@ -14,6 +14,7 @@ import (
 	"github.com/russellbrasser/go-review/internal/changes"
 	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/review"
+	"github.com/russellbrasser/go-review/internal/testquality"
 	"github.com/russellbrasser/go-review/internal/webui"
 )
 
@@ -33,6 +34,13 @@ type Server struct {
 	changeJob       *changeJob
 	changeError     string
 	changeClosed    bool
+	qualityMu       sync.Mutex
+	qualityStore    testquality.Store
+	qualityReady    bool
+	qualityJobs     map[string]*qualityJob
+	qualityTail     <-chan struct{}
+	qualityClosed   bool
+	qualityAssess   func(context.Context, *testquality.Assessment, testquality.Responsibility, intelligence.Config) (testquality.Responsibility, error)
 }
 
 func New(report *review.Report) *Server {
@@ -66,6 +74,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/changes/collect", s.changesCollect)
 	mux.HandleFunc("/api/changes/cancel", s.changesCancel)
 	mux.HandleFunc("/api/changes", s.changesStatus)
+	mux.HandleFunc("/api/test-quality/start", s.qualityStart)
+	mux.HandleFunc("/api/test-quality/status", s.qualityStatus)
+	mux.HandleFunc("/api/test-quality/cancel", s.qualityCancel)
+	mux.HandleFunc("/api/test-quality/query", s.qualityQuery)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")

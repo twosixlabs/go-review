@@ -118,8 +118,8 @@ func TestMCPReadOnlyRetainedExploration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 13 {
-		t.Fatalf("tools=%d, want 13", len(tools.Tools))
+	if len(tools.Tools) != 14 {
+		t.Fatalf("tools=%d, want 14", len(tools.Tools))
 	}
 	for _, tool := range tools.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {

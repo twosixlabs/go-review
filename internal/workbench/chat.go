@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/review"
+	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
 type navigation struct {
@@ -55,6 +56,7 @@ type chatRequest struct {
 	Message         string                 `json:"message"`
 	SnapshotID      string                 `json:"snapshotID"`
 	ComparisonID    string                 `json:"comparisonID,omitempty"`
+	AssessmentID    string                 `json:"assessmentID,omitempty"`
 	History         []intelligence.Message `json:"history"`
 	Context         json.RawMessage        `json:"context"`
 	AllowNavigation bool                   `json:"allowNavigation"`
@@ -312,7 +314,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	service := s.newChatService()
 	var snapshot *querySnapshot
 	var err error
-	if request.ComparisonID != "" {
+	if request.AssessmentID != "" {
+		_, err = s.queryTestQuality(r.Context(), testquality.QueryInput{AssessmentID: request.AssessmentID, Operation: "overview"})
+	} else if request.ComparisonID != "" {
 		_, err = s.currentComparison(request.ComparisonID)
 	} else {
 		snapshot, _, err = service.snapshot(request.SnapshotID, "")
@@ -366,13 +370,41 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	}
 	tools := []intelligence.Tool{}
 	allowed := map[string]bool{}
+	qualityAvailable := request.AssessmentID != ""
+	if !qualityAvailable && snapshot != nil && snapshot.report.Root != "" {
+		root := snapshot.report.Root
+		s.mu.RLock()
+		if s.review != nil {
+			root = s.review.Root
+		}
+		s.mu.RUnlock()
+		s.qualityMu.Lock()
+		if err := s.qualityInit(); err != nil {
+			s.qualityMu.Unlock()
+			return err
+		}
+		list, listErr := s.qualityStore.List(root)
+		s.qualityMu.Unlock()
+		if listErr != nil {
+			return listErr
+		}
+		qualityAvailable = len(list) > 0
+	}
 	for _, tool := range inventory.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			continue
+		}
+		if tool.Name == "review_test_quality" && !qualityAvailable {
 			continue
 		}
 		schema, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			return err
+		}
+		// Chat needs a compact subset of optional archive filters so adding
+		// Test Quality does not consume the existing small-context budget.
+		if tool.Name == "review_test_quality" {
+			schema = qualityChatSchema
 		}
 		tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: tool.Name, Description: "READ-ONLY evidence query; never changes the browser. UI changes require navigate_ui. " + tool.Description, Parameters: schema}})
 		allowed[tool.Name] = true
@@ -381,6 +413,11 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	tools = append(tools,
 		intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "navigate_changes", Description: "Navigate pinned Change Review evidence; never collects or changes local progress. Uses host navigation permission.", Parameters: navigateChangesSchema}},
 		intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "propose_change_action", Description: "Propose resolve/fetch, collect, cancel or local progress action. Does not execute; requires separate explicit human confirmation in the host.", Parameters: changeProposalSchema}})
+	if request.AssessmentID != "" {
+		tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "navigate_test_quality",
+			Description: "Show saved Test Quality overview, responsibility or cited source. Requires assessmentID; responsibility requires snapshotID and symbolID; source requires snapshotID/fileID/startLine/endLine. Uses user navigation permission; never starts assessment.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"assessmentID":{"type":"string"},"operation":{"type":"string","enum":["overview","responsibility","source"]},"snapshotID":{"type":"string"},"symbolID":{"type":"string"},"fileID":{"type":"string"},"startLine":{"type":"integer"},"endLine":{"type":"integer"}},"required":["assessmentID","operation"],"additionalProperties":false}`)}})
+	}
 	tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "recall_evidence",
 		Description: "Read exact evidence archived earlier in this turn. Follow nextOffset for more text.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"archiveID":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["archiveID"],"additionalProperties":false}`)}})
@@ -391,8 +428,17 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	evidenceContext := "\nInitial comparisonID: " + request.ComparisonID + "\nUse review_changes for pinned comparison evidence. Before/After snapshots are not ordinary Application snapshots."
 	if snapshot != nil {
 		evidenceContext = "\nInitial snapshotID: " + snapshot.info.ID + "\nInitial conversation module: " + snapshot.info.Module
+	} else if request.AssessmentID != "" {
+		evidenceContext = "\nInitial assessmentID: " + request.AssessmentID + "\nUse review_test_quality for this archive; its snapshot IDs are NOT ordinary Application snapshots."
 	}
-	messages := []intelligence.Message{{Role: "system", Content: agentInstructions + changeAgentInstructions + evidenceContext +
+	qualityInstructions := ""
+	if qualityAvailable {
+		qualityInstructions = "\nreview_test_quality reads saved AI test-quality assessments (operation assessments discovers IDs). It never launches jobs or tests. Cite [test-quality:ASSESSMENT_ID|SNAPSHOT_ID|SYMBOL_ID].\n"
+	}
+	if request.AssessmentID != "" {
+		qualityInstructions = testQualityAgentInstructions
+	}
+	messages := []intelligence.Message{{Role: "system", Content: agentInstructions + changeAgentInstructions + qualityInstructions + evidenceContext +
 		"\nNavigation authorized this turn: " + fmt.Sprint(request.AllowNavigation) + "\nCurrent UI context: " + contextText}}
 	messages = append(messages, request.History...)
 	messages = append(messages, intelligence.Message{Role: "user", Content: request.Message})
@@ -401,7 +447,23 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	// model claim cannot stand in for retained evidence or occurrence IDs.
 	refreshName := "review_changes"
 	refreshArgs := map[string]any{"comparisonID": request.ComparisonID, "operation": "overview"}
-	if snapshot != nil {
+	if request.AssessmentID != "" {
+		var input testquality.QueryInput
+		refreshArgs = map[string]any{}
+		err = json.Unmarshal(request.Context, &input)
+		if err == nil {
+			input.AssessmentID = request.AssessmentID
+			if input.Operation == "" {
+				input.Operation = "overview"
+			}
+			data, encodeErr := json.Marshal(input)
+			err = encodeErr
+			if err == nil {
+				err = json.Unmarshal(data, &refreshArgs)
+			}
+		}
+		refreshName = "review_test_quality"
+	} else if snapshot != nil {
 		refreshName, refreshArgs, err = chatRefresh(snapshot.info, request.Context)
 	} else if len(request.Context) > 0 {
 		var input changeQueryInput
@@ -503,7 +565,7 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 				return fmt.Errorf("invalid arguments for %s", call.Function.Name)
 			}
 			name := call.Function.Name
-			if name != "navigate_ui" && name != "navigate_changes" && name != "propose_change_action" && name != "recall_evidence" && !allowed[name] {
+			if name != "navigate_ui" && name != "navigate_changes" && name != "navigate_test_quality" && name != "propose_change_action" && name != "recall_evidence" && !allowed[name] {
 				return fmt.Errorf("model requested unavailable tool %q", name)
 			}
 			if err := emit(chatEvent{Type: "tool", Tool: name, Args: args}); err != nil {
@@ -521,7 +583,24 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 					return err
 				}
 			}
-			if name == "navigate_changes" {
+			if name == "navigate_test_quality" {
+				var input testquality.QueryInput
+				d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
+				d.DisallowUnknownFields()
+				if toolErr = d.Decode(&input); toolErr == nil {
+					if input.Operation != "overview" && input.Operation != "responsibility" && input.Operation != "source" {
+						toolErr = fmt.Errorf("unsupported Test Quality navigation")
+					} else {
+						_, toolErr = s.queryTestQuality(ctx, input)
+					}
+				}
+				if toolErr == nil {
+					if err := emit(chatEvent{Type: "quality_navigation", Args: map[string]any{"input": input, "automatic": request.AllowNavigation}}); err != nil {
+						return err
+					}
+					output = map[string]any{"status": "validated Test Quality navigation dispatched; await browser context to confirm", "automatic": request.AllowNavigation}
+				}
+			} else if name == "navigate_changes" {
 				var input changeQueryInput
 				d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
 				d.DisallowUnknownFields()
@@ -594,7 +673,11 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 					output, toolErr = memory.read(recall.ArchiveID, recall.Offset)
 				}
 			} else {
-				if name == "review_changes" {
+				if name == "review_test_quality" {
+					if _, ok := args["assessmentID"]; !ok && request.AssessmentID != "" {
+						args["assessmentID"] = request.AssessmentID
+					}
+				} else if name == "review_changes" {
 					if _, ok := args["comparisonID"]; !ok && request.ComparisonID != "" {
 						args["comparisonID"] = request.ComparisonID
 					}
