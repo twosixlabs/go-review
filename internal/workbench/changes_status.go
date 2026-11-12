@@ -8,7 +8,7 @@ func (s *Server) changeStatusLocked() map[string]any {
 		status["progress"] = s.changeJob.progress
 	}
 	if s.changePreview != nil {
-		status["preview"] = map[string]any{"previewID": s.changePreviewID, "before": s.changePreview.Before, "after": s.changePreview.After, "scope": s.changeScope}
+		status["preview"] = map[string]any{"previewID": s.changePreviewID, "before": s.changePreview.Before, "after": s.changePreview.After, "target": s.changePreview.Target, "scope": s.changeScope}
 	}
 	if s.comparison != nil {
 		status["comparisonID"] = s.comparison.ID

@@ -33,9 +33,9 @@ test('diverse retained revisions keep every supporting change and unavailable si
     await window.changeSelectRecord(errorRecord.id);
     const errorDetail=await window.changeQuery('record',{recordID:errorRecord.id});
     await window.changeCompare(errorDetail.files.items[0],errorDetail);
-    const errorSource=[...window.document.querySelectorAll('#change-reader .change-pair pre')].map(e=>e.textContent);
-    assert.match(errorSource[0],/if v<0\{return -1\}/);
-    assert.match(errorSource[1],/if v<0\{return -2\}/);
+    const errorSource=window.document.querySelector('#change-reader .change-diff').textContent;
+    assert.match(errorSource,/if v<0\{return -1\}/);
+    assert.match(errorSource,/if v<0\{return -2\}/);
     assert.ok(overview.limitations.items.some(l=>/not proof/.test(l)),'source exploration lost runtime counterevidence boundary');
     console.log(JSON.stringify({task:'changed-error-path',workflow:'Change Review',actions:['select affected First flow','select First changed responsibility','compare its retained source'],
       before:'negative helper result returns -1',after:'negative helper result returns -2',
@@ -46,9 +46,9 @@ test('diverse retained revisions keep every supporting change and unavailable si
       await window.changeSelectFile(file);
       assert.equal(window.document.querySelector('#change-detail h3').textContent,file.after.path||file.before.path);
       await window.changeCompare(file.id);
-      assert.equal(window.document.querySelectorAll('#change-reader .change-pair section').length,2);
+      assert.equal(window.document.querySelectorAll('#change-reader details section').length,2);
       await [...window.document.querySelectorAll('#change-reader button')].find(b=>/targeted Git patch/.test(b.textContent)).onclick();
-      assert.match(window.document.querySelector('#change-reader').textContent,/Before:.*After:/s);
+      assert.match(window.document.querySelector('#change-reader').textContent,/Load before retained source.*Load after retained source/s);
     }
     for(const name of ['notes.md','config.json','lib/api.wit','go.mod','app_test.go','inactive.go','generated.go','excluded.go','asset.bin','scripts/verify.sh'])
       assert.ok(files.some(f=>(f.after.path||f.before.path)===name),'missing supporting change '+name);
@@ -60,7 +60,7 @@ test('diverse retained revisions keep every supporting change and unavailable si
     assert.ok(removed?.before&&!removed.after,'deleted declaration lost its Before identity');
     await window.changeSelectRecord(removed.id);
     await window.changeCompare((await window.changeQuery('record',{recordID:removed.id})).files.items[0],removed);
-    assert.match(window.document.querySelector('#change-reader .change-pair section').textContent,/Gone/);
+    assert.match(window.document.querySelector('#change-reader .change-diff').textContent,/Gone/);
     const unavailable=flows.find(f=>f.status==='after-unavailable');
     assert.ok(unavailable,'broken module lost its retained Before flow');
     await window.changeSelectFlow(unavailable);

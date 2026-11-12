@@ -14,13 +14,14 @@ test('Change Review stays independent of Application and does not mark progress 
   const revisions={before:{label:'base',commit:'a'.repeat(40)},after:{label:'head',commit:'b'.repeat(40)}};
   const requests=[];
   let comparisonID='comparison';
-  let releaseSource,sourceGate,recordFixture;
+  let releaseSource,sourceGate,recordFixture,previewFixture;
   dom.window.fetch=async(url,options)=>{
     requests.push({url,options});
     const args=options?.body?JSON.parse(options.body):{};
     if(args.operation==='source'&&sourceGate)await sourceGate;
-    const value=url==='/api/snapshot'?report:url==='/api/review'?{running:false,run:null}:url==='/api/chat/status'?{enabled:false}:
-      url==='/api/changes'?{running:false,comparisonID,revisions}:
+    const value=url==='/api/changes/resolve'?{...revisions,previewID:'preview',target:revisions.before}:
+      url==='/api/snapshot'?report:url==='/api/review'?{running:false,run:null}:url==='/api/chat/status'?{enabled:false}:
+      url==='/api/changes'?{running:false,comparisonID,revisions,preview:previewFixture}:
       args.operation==='record'&&recordFixture?{id:'many',title:'Shared helper',itemCount:1,fileCount:11,flowCount:11,
         items:{items:['item'],nextOffset:null},
         files:{items:Array.from({length:11},(_,i)=>'file-'+i).slice(args.offset||0,(args.offset||0)+10),nextOffset:args.offset?null:10},
@@ -36,6 +37,30 @@ test('Change Review stays independent of Application and does not mark progress 
     for(const match of fs.readFileSync(path.join(__dirname,'index.html'),'utf8').matchAll(/<script src="\/([^"]+)"><\/script>/g))
       vm.runInContext(fs.readFileSync(path.join(__dirname,match[1]),'utf8'),ctx,{filename:match[1]});
     await new Promise(resolve=>setImmediate(resolve));
+    const remote=dom.window.document.querySelector('#change-remote');
+    const mergeBase=dom.window.document.querySelector('#change-merge-base');
+    assert.ok(remote&&mergeBase,'Git remote and merge-base controls must be available');
+    dom.window.document.querySelector('#change-directory').value='/repo';
+    dom.window.document.querySelector('#change-before').value='main';
+    dom.window.document.querySelector('#change-after').value='feature';
+    remote.value='fork';mergeBase.checked=true;
+    dom.window.document.querySelector('#change-input-form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
+    await new Promise(resolve=>setImmediate(resolve));
+    const resolution=requests.find(r=>r.url==='/api/changes/resolve');
+    assert.deepEqual(JSON.parse(resolution.options.body),{directory:'/repo',before:'main',after:'feature',remote:'fork',mergeBase:true});
+    dom.window.confirm=()=>true;
+    await vm.runInContext("changeApplyProposal({action:'resolve',directory:'/repo',before:'main',after:'feature',remote:'fork',mergeBase:false})",ctx);
+    await new Promise(resolve=>setImmediate(resolve));
+    const proposed=requests.filter(r=>r.url==='/api/changes/resolve').at(-1);
+    assert.deepEqual(JSON.parse(proposed.options.body),{directory:'/repo',before:'main',after:'feature',remote:'fork',mergeBase:false},
+      'confirmed chat proposal must preserve the Git remote and comparison mode');
+    previewFixture={...revisions,previewID:'restored',target:{label:'target',commit:'c'.repeat(40)}};
+    dom.window.document.querySelector('#change-preview').replaceChildren();
+    dom.window.document.querySelector('#change-confirm').hidden=true;
+    await vm.runInContext('changeOpen()',ctx);
+    assert.match(dom.window.document.querySelector('#change-preview').textContent,/Target tip.*cccc/,'reopened preview must disclose its target');
+    assert.equal(dom.window.document.querySelector('#change-confirm').hidden,false,'reopened pinned preview must remain actionable');
+    previewFixture=null;
     const before=vm.runInContext('JSON.stringify({report,mode})',ctx);
     const destination=dom.window.document.querySelector('#change-review');
     assert.ok(destination,'Change Review must be a persistent Explore destination');

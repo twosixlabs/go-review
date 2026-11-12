@@ -45,9 +45,11 @@ test('real retained comparison supports hidden/shared changes, side evidence and
     await until(()=>window.document.querySelector('#change-detail h3')?.textContent.includes('helper'),'shared implementation selection');
     const compare=[...window.document.querySelectorAll('#change-detail button')].find(b=>b.textContent==='Compare retained file evidence');
     compare.click();
-    await until(()=>window.document.querySelectorAll('#change-reader pre').length===2,'paired reader');
-    const source=[...window.document.querySelectorAll('#change-reader pre')].map(n=>n.textContent);
-    assert.match(source[0],/return 1/);assert.match(source[1],/return 2/);
+    await until(()=>window.document.querySelector('#change-reader .change-diff-row'),'paired diff reader');
+    const source=window.document.querySelector('#change-reader .change-diff').textContent;
+    assert.match(source,/return 1/);assert.match(source,/return 2/);
+    assert.ok(window.document.querySelector('#change-reader .change-diff-removed'));
+    assert.ok(window.document.querySelector('#change-reader .change-diff-added'));
     const logical=[...window.document.querySelectorAll('#change-detail button')].find(b=>b.textContent==='before: Logical flow');
     assert.ok(logical,'pinned implementation has no Logical Flow drill-in');
     await logical.onclick();

@@ -13,7 +13,7 @@ type Request struct {
 	Before    string `json:"before"`
 	After     string `json:"after"`
 	MergeBase bool   `json:"mergeBase,omitempty"`
-	Provider  string `json:"provider,omitempty"`
+	Remote    string `json:"remote,omitempty"`
 }
 
 type Revision struct {
@@ -27,7 +27,6 @@ type Resolved struct {
 	After           Revision  `json:"after"`
 	Target          *Revision `json:"target,omitempty"`
 	Policy          string    `json:"policy"`
-	Provider        string    `json:"provider,omitempty"`
 	ObjectDirectory string    `json:"-"`
 	inputStorage    string
 }

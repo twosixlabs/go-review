@@ -20,9 +20,25 @@ body.change-review-open.chat-open #change-workspace { margin-right:clamp(380px,3
 #change-flow { min-height:340px; overflow:hidden; border:1px solid #b1bdc8; }
 #change-flow svg { width:100%; height:58vh; touch-action:none; }
 #change-flow-tools { display:flex; flex-wrap:wrap; gap:5px; padding:6px 0; }
-.change-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 #change-reader pre,#change-detail pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:.8rem; }
 #change-reader { border:1px solid #8a9eae; padding:10px; }
+.change-diff { max-height:72vh; overflow:auto; border:1px solid #647b8d; background:#101f30; color:#e7edf5; font: .8rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.change-diff-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); min-width:900px; }
+.change-diff-head { position:sticky; top:0; z-index:1; background:#243c53; }
+.change-diff-head strong { padding:6px; overflow-wrap:anywhere; }
+.change-diff-cell { display:flex; min-width:0; border-top:1px solid transparent; border-right:1px solid #405265; white-space:pre; overflow-x:auto; }
+.change-diff-number { flex:none; width:4.5em; padding:0 .6em; color:#aebfd0; text-align:right; user-select:none; }
+.change-diff-marker { flex:none; width:1.5em; font-weight:bold; }
+.change-diff-code { color:inherit; }
+.change-diff-removed { background:#542b35; }
+.change-diff-added { background:#204a38; }
+.change-diff-empty { background:#182636; }
+.change-diff-no-newline { color:#ffd587; padding-left:.5em; }
+.change-diff .token.comment { color:#9aacb7; }
+.change-diff .token.keyword,.change-diff .token.boolean { color:#daafff; }
+.change-diff .token.string,.change-diff .token.char { color:#a8e7ae; }
+.change-diff .token.number,.change-diff .token.function { color:#8ecbff; }
+.change-diff .token.operator,.change-diff .token.punctuation { color:#d5dde6; }
 .change-wide .change-grid { grid-template-columns:220px minmax(0,1fr); }
 .change-wide #change-detail { grid-column:1/-1; max-height:none; }
 .change-item { border-bottom:1px solid #bbc5ce; padding:8px 2px; }

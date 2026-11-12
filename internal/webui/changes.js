@@ -67,13 +67,14 @@ async function changeApplyProposal(proposal) {
   if(proposal.action==='state'){
     if(proposal.comparisonID!==changeState.id)throw Error('Stale progress proposal; reload current comparison');
     if(!confirm(`Update these exact local review identifiers?\n${JSON.stringify(proposal,null,2)}`))return;
-    const {action,directory,before,after,provider,...state}=proposal;
+    const {action,directory,before,after,remote,mergeBase,...state}=proposal;
     await changeRequest('/api/changes/state',{...state,confirmed:true});await changeRefresh();
   }else if(proposal.action==='resolve'){
-    if(!confirm('Read revision metadata and fetch PR/MR inputs if supplied? This does not collect analysis or publish provider changes.'))return;
+    if(!confirm('Resolve Git revisions and fetch the source remote if supplied? This does not collect analysis or change the checkout.'))return;
     await changeOpen();changeEl('change-inputs').open=true;
     changeEl('change-directory').value=proposal.directory;changeEl('change-before').value=proposal.before||'';
-    changeEl('change-after').value=proposal.after||'';changeEl('change-provider').value=proposal.provider||'';
+    changeEl('change-after').value=proposal.after||'';changeEl('change-remote').value=proposal.remote||'';
+    changeEl('change-merge-base').checked=!!proposal.mergeBase;
     changeEl('change-input-form').requestSubmit();
   }else if(proposal.action==='collect'){
     if(changeState.preview?.previewID!==proposal.previewID||changeState.preview.before.commit!==proposal.before||changeState.preview.after.commit!==proposal.after)throw Error('Stale collection proposal; resolve and inspect the pinned revision preview again');
@@ -106,6 +107,14 @@ function changeAdoptComparison(id) {
   for(const name of ['change-list','change-detail','change-flow','change-flow-tools','change-reader'])changeEl(name).replaceChildren();
   changeEl('change-reader').hidden=true;document.body.classList.remove('change-wide');
 }
+function changeRenderPreview(preview) {
+  const target=changeEl('change-preview');target.replaceChildren();
+  changeEl('change-confirm').hidden=!preview;
+  if(!preview)return;
+  el('pre',`Before: ${preview.before.label}\n${preview.before.commit}\nAfter: ${preview.after.label}\n${preview.after.commit}`+
+    (preview.target?`\nTarget tip (not Before): ${preview.target.commit}`:''),target);
+  el('p','Collect static source evidence and prepare Go exports. No target tests/scripts execute. Replacing a comparison binds progress to the new evidence identity.',target);
+}
 async function changeOpen() {
   changeState.active=true;changeEl('change-workspace').hidden=false;
   document.body.append(changeEl('chat-panel'));
@@ -116,6 +125,7 @@ async function changeOpen() {
     const status=await changeRequest('/api/changes');
     changeAdoptComparison(status.comparisonID||null);
     changeState.preview=status.preview||null;changeState.jobID=status.jobID;
+    changeRenderPreview(changeState.preview);
     changeEl('change-cancel').hidden=!status.running;
     if(changeState.id)await changeRefresh();
     else {
@@ -530,30 +540,102 @@ async function changeCompare(fileID,record,remember=true) {
   changeState.fileID=fileID;
   const reader=changeEl('change-reader');reader.hidden=false;reader.replaceChildren();document.body.classList.add('change-wide');
   el('h3',record?.title||'Retained file comparison',reader);
-  button('Close comparison reader',()=>{reader.hidden=true;document.body.classList.remove('change-wide');},reader);
-  const pair=el('div',undefined,reader,'change-pair');
+  button('Close comparison reader',()=>{changeState.serial++;reader.hidden=true;document.body.classList.remove('change-wide');},reader);
+  const status=el('p','Loading retained source for both revisions…',reader);
+  const sources={};
   for(const side of ['before','after']){
-    const target=el('section',undefined,pair);el('h4',side==='before'?'Before':'After',target);
+    try {
+      let offset=0,text='',first;
+      do {
+        const page=await changeQuery('source',{fileID,side,textOffset:offset,textLimit:6000});
+        if(!current())return;
+        if(!first)first=page;
+        if(page.textPage.total>250000)throw Error('Retained source exceeds the 250,000 character diff limit.');
+        text+=page.text;
+        if(page.textPage.nextOffset!==null&&page.textPage.nextOffset<=offset)throw Error('Retained source pagination did not advance.');
+        offset=page.textPage.nextOffset;
+      } while(offset!==null);
+      sources[side]={text,path:first[side].path};
+    } catch(error) {
+      if(!current())return;
+      if(error.message===`file is absent on ${side}`)sources[side]={text:'',path:'',absent:true};
+      else sources[side]={error:error.message};
+    }
+  }
+  if(!current())return;
+  status.remove();
+  for(const side of ['before','after']){
+    const source=sources[side];
+    if(source.absent)el('p',`File is absent on ${side}.`,reader);
+    if(source.error)el('p',`${side}: ${source.error}`,reader,'error');
+  }
+  if(sources.before.error||sources.after.error)el('p','The diff is unavailable because complete source is unavailable. Read the retained source or Git patch below.',reader);
+  else {
+    const lineCount=(sources.before.text.match(/\n/g)||[]).length+(sources.after.text.match(/\n/g)||[]).length;
+    const changes=lineCount<=10000?Diff.diffLines(sources.before.text,sources.after.text,{timeout:1000,maxEditLength:4000}):undefined;
+    if(!changes)el('p','The diff exceeds the display limits. Read the retained source or Git patch below.',reader);
+    else changeRenderDiff(reader,sources,changes);
+  }
+  const retained=el('details',undefined,reader);el('summary','Read retained source',retained);
+  for(const side of ['before','after']){
+    const target=el('section',undefined,retained);el('h4',side==='before'?'Before':'After',target);
     const load=async(offset=0)=>{
       try{
-        const owner=record?.[side]?.location;
-        const result=await changeQuery('source',{fileID,side,textOffset:offset,startLine:owner?Math.max(1,owner.line-3):undefined,endLine:owner?owner.endLine+3:undefined});
+        const result=await changeQuery('source',{fileID,side,textOffset:offset});
         if(!current())return;
-        el('small',`${side==='before'?result.before.path:result.after.path}:${result.line}`,target);
-        el('pre',result.text,target);
+        el('small',`${result[side].path}:${result.line}`,target);el('pre',result.text,target);
         if(result.textPage.nextOffset!==null){
           const more=button('Continue retained source',()=>changeAct(async()=>{await load(result.textPage.nextOffset);more.remove();}),target);
         }
       }catch(error){if(current())el('p',error.message,target,'error');}
     };
-    await load();
-    if(!current())return;
+    button(`Load ${side} retained source`,()=>changeAct(()=>load()),target);
   }
   const patch=async(offset=0)=>{
     const result=await changeQuery('patch',{fileID,textOffset:offset});if(!current())return;el('pre',result.text,reader);
     if(result.textPage.nextOffset!==null){const more=button('Continue patch',()=>changeAct(async()=>{await patch(result.textPage.nextOffset);more.remove();}),reader);}
   };
   button('Read targeted Git patch',()=>changeAct(patch),reader);
+}
+function changeRenderDiff(reader,sources,changes) {
+  el('p','Aligned full-file diff · red: removed · green: added · blank cells have no corresponding line.',reader);
+  const viewport=el('div',undefined,reader,'change-diff');viewport.tabIndex=0;
+  viewport.setAttribute('role','region');viewport.setAttribute('aria-label','Side-by-side retained source diff');
+  const headings=el('div',undefined,viewport,'change-diff-row change-diff-head');
+  for(const side of ['before','after'])el('strong',`${side==='before'?'Before':'After'} · ${sources[side].path||'(absent)'}`,headings);
+  const languages={go:'go',json:'json',js:'javascript',mjs:'javascript',py:'python',sh:'bash',bash:'bash'};
+  const lines=change=>{
+    const parts=change.value.split('\n');
+    if(parts.at(-1)==='')parts.pop();
+    return parts.map((text,index)=>({text,noNewline:index===parts.length-1&&!change.value.endsWith('\n')}));
+  };
+  let beforeLine=1,afterLine=1;
+  const row=(left,right,removed=false,added=false)=>{
+    const container=el('div',undefined,viewport,'change-diff-row');
+    for(const [side,line,changed] of [['before',left,removed],['after',right,added]]){
+      const cell=el('div',undefined,container,`change-diff-cell${changed?' change-diff-'+(side==='before'?'removed':'added'):''}`);
+      if(!line){cell.classList.add('change-diff-empty');continue;}
+      const number=side==='before'?beforeLine++:afterLine++;
+      el('span',String(number),cell,'change-diff-number');
+      el('span',changed?(side==='before'?'-':'+'):' ',cell,'change-diff-marker');
+      const code=el('code',undefined,cell,'change-diff-code');
+      const ext=sources[side].path.split('.').pop().toLowerCase(),language=languages[ext];
+      if(language&&line.text.length<=4000)code.innerHTML=Prism.highlight(line.text,Prism.languages[language],language);
+      else code.textContent=line.text;
+      if(line.noNewline)el('span',' [no final newline]',cell,'change-diff-no-newline');
+    }
+  };
+  for(let i=0;i<changes.length;i++){
+    const change=changes[i];
+    if(!change.added&&!change.removed){for(const line of lines(change))row(line,line);continue;}
+    let removed=[],added=[];
+    while(i<changes.length&&(changes[i].added||changes[i].removed)){
+      if(changes[i].removed)removed.push(...lines(changes[i]));else added.push(...lines(changes[i]));
+      i++;
+    }
+    i--;
+    for(let n=0;n<Math.max(removed.length,added.length);n++)row(removed[n],added[n],!!removed[n],!!added[n]);
+  }
 }
 async function changeMark(action) {
   if(!confirm(action.flowID?'Update this local flow-context consideration?':`Update exactly ${action.itemIDs.length} displayed item IDs to ${action.status}? This is local tracking, not provider approval.`))return;
@@ -591,12 +673,8 @@ changeEl('change-filter').onchange=()=>{changeState.status=changeEl('change-filt
 changeEl('change-input-form').onsubmit=event=>{
   event.preventDefault();changeAct(async()=>{
     const resolved=await changeRequest('/api/changes/resolve',{directory:changeEl('change-directory').value,
-      before:changeEl('change-before').value,after:changeEl('change-after').value,provider:changeEl('change-provider').value});
-    changeState.preview=resolved;const target=changeEl('change-preview');target.replaceChildren();
-    el('pre',`Before: ${resolved.before.label}\n${resolved.before.commit}\nAfter: ${resolved.after.label}\n${resolved.after.commit}`+
-      (resolved.target?`\nTarget tip (not Before): ${resolved.target.commit}`:''),target);
-    el('p','Collect static source evidence and prepare Go exports. No target tests/scripts execute. Replacing a comparison binds progress to the new evidence identity.',target);
-    changeEl('change-confirm').hidden=false;
+      before:changeEl('change-before').value,after:changeEl('change-after').value,remote:changeEl('change-remote').value,mergeBase:changeEl('change-merge-base').checked});
+    changeState.preview=resolved;changeRenderPreview(resolved);
   });
 };
 changeEl('change-confirm').onclick=()=>changeAct(async()=>{

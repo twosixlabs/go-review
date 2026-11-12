@@ -45,7 +45,7 @@ function tutorialContext() {
 function tutorialLessons() {
   const lesson=(title,text,target='#canvas')=>[title,text,target];
   if(typeof changeState!=='undefined'&&changeState.active)return [
-    lesson('Confirm what is being compared','Resolve committed refs or a PR/MR URL, inspect the pinned commits and confirm static collection. PR/MR only supplies revisions; no comments, approvals or statuses are published.','#change-inputs'),
+    lesson('Confirm what is being compared','Resolve local committed refs or fetch a source from a Git remote. Optionally compare from the merge base; inspect the pinned commits and confirm static collection.','#change-inputs'),
     lesson('Start with affected behavior','Select a flow, then an annotated stage or its Changes list. A hidden helper remains reviewable even when the visible diagram has not changed. Before and After are separate source-backed scenes, not an execution trace.','#change-flow'),
     lesson('Read implementation in context','Shared implementation is counted once across its associated callers. Open retained Before/After source, targeted patch, source witnesses or revision-specific logical/control/data evidence. Other changes and Complete Git inventory retain material with no semantic mapping.','#change-perspectives'),
     lesson('Track implementation and consequences separately','Reading never marks anything reviewed. Explicit reversible actions affect the displayed item IDs. Flow-context consideration is separate; neither state is an approval or proof of correctness. Chat navigation cannot authorize collection or progress changes.','#change-progress')

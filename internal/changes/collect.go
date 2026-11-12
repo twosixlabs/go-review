@@ -203,7 +203,6 @@ func Collect(ctx context.Context, r Resolved, storage string, scope review.Revie
 	revisionIdentity := r
 	revisionIdentity.Before.Label = ""
 	revisionIdentity.After.Label = ""
-	revisionIdentity.Provider = ""
 	if r.Target != nil {
 		target := *r.Target
 		target.Label = ""

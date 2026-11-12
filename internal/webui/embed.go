@@ -11,6 +11,7 @@ import (
 //go:embed review-query-tools.js
 //go:embed change-tools.js
 //go:embed changes.js changes.css
+//go:embed vendor/diff.min.js vendor/diff.LICENSE vendor/prism-core.min.js vendor/prism-clike.min.js vendor/prism-go.min.js vendor/prism-json.min.js vendor/prism-javascript.min.js vendor/prism-python.min.js vendor/prism-bash.min.js vendor/prism.LICENSE
 //go:embed chat.js chat-tools.js chat.css
 //go:embed workspace.js workspace.css
 //go:embed tutorial.js tutorial.css

@@ -371,11 +371,11 @@ func (s *Server) changesResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	var resolved changes.Resolved
 	var err error
-	if request.Provider != "" {
+	if request.Remote != "" {
 		var storage string
 		storage, err = changes.Storage()
 		if err == nil {
-			resolved, err = changes.ResolveProvider(r.Context(), request, storage)
+			resolved, err = changes.ResolveRemote(r.Context(), request, storage)
 		}
 	} else {
 		resolved, err = changes.Resolve(r.Context(), request)

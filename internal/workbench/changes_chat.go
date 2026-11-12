@@ -14,7 +14,8 @@ type changeProposal struct {
 	Directory string `json:"directory,omitempty"`
 	Before    string `json:"before,omitempty"`
 	After     string `json:"after,omitempty"`
-	Provider  string `json:"provider,omitempty"`
+	Remote    string `json:"remote,omitempty"`
+	MergeBase bool   `json:"mergeBase,omitempty"`
 	PreviewID string `json:"previewID,omitempty"`
 	JobID     string `json:"jobID,omitempty"`
 }
@@ -28,8 +29,8 @@ func (s *Server) validateChangeProposal(ctx context.Context, p changeProposal) e
 		if p.Directory == "" {
 			return fmt.Errorf("repository directory is required")
 		}
-		if p.Provider == "" && (p.Before == "" || p.After == "") {
-			return fmt.Errorf("committed Before/After refs or PR/MR URL are required")
+		if p.Before == "" || p.After == "" {
+			return fmt.Errorf("committed Before/After refs are required")
 		}
 		return nil
 	case "collect", "cancel":
@@ -76,7 +77,7 @@ var navigateChangesSchema = json.RawMessage(`{"type":"object","properties":{
 
 var changeProposalSchema = json.RawMessage(`{"type":"object","properties":{
  "action":{"type":"string","enum":["resolve","collect","cancel","state"]},"comparisonID":{"type":"string"},"version":{"type":"integer","minimum":0},"previewID":{"type":"string"},"jobID":{"type":"string"},
- "directory":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"},"provider":{"type":"string"},
+ "directory":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"},"remote":{"type":"string"},"mergeBase":{"type":"boolean"},
  "itemIDs":{"type":"array","items":{"type":"string"}},"status":{"type":"string","enum":["not-reviewed","reviewed","follow-up"]},
  "flowID":{"type":"string"},"considered":{"type":"boolean"}},
  "required":["action"],"additionalProperties":false}`)

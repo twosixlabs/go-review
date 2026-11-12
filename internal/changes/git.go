@@ -64,7 +64,6 @@ func Resolve(ctx context.Context, request Request) (Resolved, error) {
 		return result, fmt.Errorf("resolve After: %w", err)
 	}
 	result.Policy = Policy
-	result.Provider = request.Provider
 	if request.MergeBase {
 		target := result.Before
 		result.Target = &target
@@ -82,6 +81,7 @@ func Resolve(ctx context.Context, request Request) (Resolved, error) {
 }
 
 var hunkHeader = regexp.MustCompile(`(?m)^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@`)
+var commitOID = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 var binaryDiagnostic = regexp.MustCompile(`(?m)^Binary files .+ differ$`)
 var lfsPointer = regexp.MustCompile(`\Aversion https://git-lfs.github.com/spec/v1\noid sha256:[0-9a-f]{64}\nsize [0-9]+\n?\z`)
 
