@@ -207,6 +207,14 @@ after a project-wide assessment and return to the aggregate context. A finding
 links to retained production and test source, its relevant coverage and run
 scope, and existing Application and flow views.
 
+Starting an assessment schedules it as a background workbench job and returns
+control to the user immediately. They can navigate to and explore other views,
+including chat and project evidence, while it runs, and return to Test Quality
+to inspect progress or results. Provide an unobtrusive persistent status and a
+way to return to the job and cancel it without blocking the rest of the app.
+Navigating away, switching views or closing the browser tab does not cancel the
+job while the workbench process remains running.
+
 Show assessment progress and cancellation, completed or partial results,
 provider/configuration failures, insufficient evidence and results from older
 snapshots explicitly. A user can reopen saved results, inspect their model and
@@ -225,6 +233,24 @@ interpretation, not measurement or lifecycle control. Support incremental
 project-wide work within bounded requests and context limits; surface what was
 not reviewed when a limit or provider failure stops the run. Never call a
 partial or failed run complete.
+
+The workbench process owns each background job independently of the initiating
+HTTP request and browser view. Pin the source snapshots and provider settings
+for the job at launch; navigating, selecting another module or starting a chat
+must not change its inputs or redirect its results. Assessment and chat have
+separate conversation and cancellation state. Make resource limits and
+contention visible rather than blocking browsing or silently cancelling a job.
+Allow one active assessment per project review; a duplicate start returns the
+existing job and status instead of launching duplicate work. Different
+projects' concurrency is bounded by the host and queued work is visible.
+Explicit cancellation stops outstanding provider work and persists a
+cancelled, possibly partial result.
+
+Persist job status and incremental completed work so reconnecting to the
+workbench can recover the current state. On workbench shutdown, cancel active
+jobs cleanly; after an unexpected restart, mark interrupted jobs and retain
+their last valid partial results rather than claiming completion or silently
+restarting model calls. The user may explicitly start a new assessment.
 
 Persist the assessment separately from the source report with a stable ID,
 snapshot and module identities, selection/exclusions, status, timestamps,
@@ -285,6 +311,11 @@ where explicitly authorized:
 - Dedicated view drill-down, project overview link, chat and MCP expose
   consistent results and underlying evidence. Browsing does not rerun
   collection or read a changed checkout.
+- Launch returns while assessment is running; navigation, chat and browser
+  reconnection leave the background job running with pinned inputs. Duplicate
+  launches, cancellation, bounded concurrent work, shutdown and unexpected
+  restart produce visible, correctly persisted states without affecting other
+  views or earlier results.
 - Existing single-project review, test collection and AI-disabled behavior
   remain intact. Evidence containing instruction-like content is treated as
   data, not a command.
