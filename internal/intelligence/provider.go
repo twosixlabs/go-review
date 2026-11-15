@@ -38,6 +38,7 @@ type Provider struct {
 	Config          Config
 	RequireTool     bool
 	MaxOutputTokens int
+	UnboundedOutput bool
 	ResponseSchema  json.RawMessage
 	SchemaName      string
 }
@@ -53,10 +54,12 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		return result, fmt.Errorf("review agent is disabled")
 	}
 	tokens := p.MaxOutputTokens
-	if tokens == 0 {
+	if p.UnboundedOutput {
+		tokens = 0
+	} else if tokens == 0 {
 		tokens = 8192
 	}
-	if tokens < 256 || tokens > 8192 {
+	if !p.UnboundedOutput && (tokens < 256 || tokens > 8192) {
 		return result, fmt.Errorf("provider output token budget must be 256-8192")
 	}
 	choice := ""
@@ -86,7 +89,7 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		Messages       []Message       `json:"messages"`
 		Tools          []Tool          `json:"tools,omitempty"`
 		Stream         bool            `json:"stream"`
-		MaxTokens      int             `json:"max_tokens"`
+		MaxTokens      int             `json:"max_tokens,omitempty"`
 		Temperature    float64         `json:"temperature"`
 		ToolChoice     string          `json:"tool_choice,omitempty"`
 		ResponseFormat json.RawMessage `json:"response_format,omitempty"`
@@ -115,8 +118,15 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		}
 		return result, fmt.Errorf("model HTTP %d: %s", response.StatusCode, p.redact(strings.TrimSpace(string(detail))))
 	}
-	scanner := bufio.NewScanner(io.LimitReader(response.Body, 2<<20))
-	scanner.Buffer(make([]byte, 4096), 1<<20)
+	reader := io.Reader(response.Body)
+	maxEventBytes := 1 << 20
+	if p.UnboundedOutput {
+		maxEventBytes = int(^uint(0) >> 1)
+	} else {
+		reader = io.LimitReader(reader, 2<<20)
+	}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 4096), maxEventBytes)
 	calls := map[int]*ToolCall{}
 	finished := false
 	for scanner.Scan() {

@@ -120,7 +120,7 @@ func TestQueryDiagnosticDetailsRemainPageable(t *testing.T) {
 	}
 }
 
-func TestQueryPagesBoundEncodedBytes(t *testing.T) {
+func TestQueryPagesPreserveRows(t *testing.T) {
 	a := qualityLiveAssessment(t, `func TestContract(t *testing.T) {Classify(1)}`)
 	a.Suite = &SuiteAssessment{}
 	for i := range 12 {
@@ -139,12 +139,12 @@ func TestQueryPagesBoundEncodedBytes(t *testing.T) {
 		if err := json.Unmarshal(raw, &result); err != nil {
 			t.Fatal(err)
 		}
-		if len(raw) > 32<<10 || len(result.Items) == 0 {
-			t.Fatal("page is oversized or made no progress")
+		if len(result.Items) == 0 {
+			t.Fatal("page made no progress")
 		}
 		for _, item := range result.Items {
 			if item.ID != fmt.Sprint(offset) {
-				t.Fatal("byte-bound pagination skipped or duplicated retained rows")
+				t.Fatal("pagination skipped or duplicated retained rows")
 			}
 			offset++
 		}
@@ -157,5 +157,28 @@ func TestQueryPagesBoundEncodedBytes(t *testing.T) {
 	}
 	if offset != 12 {
 		t.Fatal("not all retained rows were reachable")
+	}
+}
+
+func TestQueryLargeSavedResultsAndSource(t *testing.T) {
+	long := strings.Repeat("x", 40000)
+	a := factsAssessment("package example\nfunc TestF() { /*" + long + "*/ }\n")
+	a.Items[0].Reason = long
+	a.Facts = []TestFacts{{Identity: a.Items[0].Identity, Limitations: []string{long}}}
+	for _, input := range []QueryInput{
+		{AssessmentID: a.ID, Operation: "test", SnapshotID: "snapshot", SymbolID: "test"},
+		{AssessmentID: a.ID, Operation: "facts"},
+		{AssessmentID: a.ID, Operation: "source", SnapshotID: "snapshot", FileID: "tests", StartLine: 1, EndLine: 2},
+	} {
+		raw, err := Query(t.Context(), a, input)
+		if err != nil || !strings.Contains(string(raw), long) {
+			t.Fatalf("%s lost large retained content: %v", input.Operation, err)
+		}
+	}
+	source := "package example\n" + strings.Repeat("// retained line\n", 600)
+	a = factsAssessment(source)
+	raw, err := Query(t.Context(), a, QueryInput{AssessmentID: a.ID, Operation: "source", SnapshotID: "snapshot", FileID: "tests", StartLine: 1, EndLine: 601})
+	if err != nil || !strings.Contains(string(raw), "retained line") {
+		t.Fatalf("long source range unavailable: %v", err)
 	}
 }

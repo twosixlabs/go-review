@@ -40,31 +40,15 @@ func page[T any](items []T, input QueryInput) (json.RawMessage, error) {
 	if limit == 0 {
 		limit = 20
 	}
-	end := input.Offset
-	encoded := []json.RawMessage{}
-	// Reserve envelope/cursor bytes; a page may contain fewer rows than its
-	// requested count, but its next offset always advances by returned rows.
-	bytesLeft := (32 << 10) - 128
-	for end < min(len(items), input.Offset+limit) {
-		raw, err := json.Marshal(items[end])
-		if err != nil {
-			return nil, err
-		}
-		if len(raw)+1 > bytesLeft {
-			if len(encoded) == 0 {
-				return nil, fmt.Errorf("single test quality row exceeds 32 KiB; use its detail operation")
-			}
-			break
-		}
-		encoded = append(encoded, raw)
-		bytesLeft -= len(raw) + 1
-		end++
+	end := min(len(items), input.Offset+limit)
+	if items == nil {
+		items = []T{}
 	}
 	var next *int
 	if end < len(items) {
 		next = &end
 	}
-	return json.Marshal(map[string]any{"items": encoded, "total": len(items), "nextOffset": next})
+	return json.Marshal(map[string]any{"items": items[input.Offset:end], "total": len(items), "nextOffset": next})
 }
 
 // Query is the common read-only projection used by HTTP, MCP and chat. It
@@ -72,14 +56,7 @@ func page[T any](items []T, input QueryInput) (json.RawMessage, error) {
 // Collective/diagnostic listings omit nested collections, which have their
 // own owner-qualified paged readers to keep large retained records reachable.
 func Query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessage, error) {
-	data, err := query(ctx, a, input)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > 32<<10 {
-		return nil, fmt.Errorf("test quality result exceeds 32 KiB; request a smaller page or source range")
-	}
-	return data, nil
+	return query(ctx, a, input)
 }
 
 func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessage, error) {

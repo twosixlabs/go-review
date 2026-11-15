@@ -18,20 +18,17 @@ func TestQualityJudgmentStopsRepeatedInvalidSubmissions(t *testing.T) {
 	var calls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
-			MaxTokens int             `json:"max_tokens"`
-			Format    json.RawMessage `json:"response_format"`
+			Format json.RawMessage `json:"response_format"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
-		}
-		if request.MaxTokens > 4096 {
-			t.Errorf("bounded judgment requested %d output tokens", request.MaxTokens)
 		}
 		calls.Add(1)
 		content := "Evidence review complete."
 		if len(request.Format) > 0 {
 			content = `{"ratings":[]}`
 		}
+
 		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\n", data)
 	}))
@@ -43,6 +40,64 @@ func TestQualityJudgmentStopsRepeatedInvalidSubmissions(t *testing.T) {
 	}
 	if calls.Load() != 3 {
 		t.Fatalf("repeated invalid submissions spent %d requests instead of stopping after correction", calls.Load())
+	}
+}
+
+func TestQualityJudgmentUsesConfiguredStepsBeyondEight(t *testing.T) {
+	calls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			Format json.RawMessage `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		delta := map[string]any{"content": `{"ok":true}`}
+		if len(request.Format) == 0 && calls <= 9 {
+			delta = map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": fmt.Sprint(calls), "function": map[string]string{"name": "inspect", "arguments": fmt.Sprintf(`{"page":%d}`, calls)}}}}
+		}
+		raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": delta, "finish_reason": "stop"}}})
+		fmt.Fprintf(w, "data: %s\n\n", raw)
+	}))
+	defer provider.Close()
+	a := factsAssessment("package example; import \"testing\"\nfunc TestF(t *testing.T) {}\n")
+	options := JudgmentOptions{Tools: []intelligence.Tool{{Type: "function", Function: intelligence.Function{Name: "inspect", Parameters: json.RawMessage(`{"type":"object","properties":{"page":{"type":"integer"}}}`)}}},
+		Read: func(context.Context, string, json.RawMessage) (json.RawMessage, []Citation, error) {
+			return json.RawMessage(`{}`), nil, nil
+		}}
+	_, err := reviewJudgment(t.Context(), a, intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture", MaxSteps: 16}, "Review.", nil, nil, "submit_suite", json.RawMessage(`{"type":"object"}`), options, func(json.RawMessage, []Citation) error { return nil })
+	if err != nil || calls != 11 {
+		t.Fatalf("configured steps not honored: calls=%d error=%v", calls, err)
+	}
+}
+
+func TestQualityJudgmentAllowsLargeUnconfiguredContextAndOutput(t *testing.T) {
+	long := strings.Repeat("x", 2200000)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, ok := request["max_tokens"]; ok {
+			t.Error("unconfigured output token limit sent to provider")
+		}
+		content, _ := json.Marshal(map[string]string{"text": long})
+		raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": string(content)}, "finish_reason": "stop"}}})
+		fmt.Fprintf(w, "data: %s\n\n", raw)
+	}))
+	defer provider.Close()
+	a := factsAssessment("package example; import \"testing\"\nfunc TestF(t *testing.T) {}\n")
+	_, err := reviewJudgment(t.Context(), a, intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture", MaxSteps: 1}, "Review.", strings.Repeat("z", 300000), nil, "submit_suite", json.RawMessage(`{"type":"object"}`), JudgmentOptions{}, func(raw json.RawMessage, _ []Citation) error {
+		if !strings.Contains(string(raw), long) {
+			return fmt.Errorf("large response was lost")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("large unconfigured judgment rejected: %v", err)
 	}
 }
 

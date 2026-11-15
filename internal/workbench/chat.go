@@ -502,7 +502,7 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 	if err != nil {
 		return err
 	}
-	if len(refreshData) > 32<<10 {
+	if refreshName != "review_test_quality" && len(refreshData) > 32<<10 {
 		return fmt.Errorf("current flow evidence exceeds 32 KiB; collapse details or return to its parent")
 	}
 	refreshJSON, err := json.Marshal(refreshArgs)
@@ -725,7 +725,7 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 			if err != nil {
 				return err
 			}
-			if len(data) > 32<<10 {
+			if name != "review_test_quality" && len(data) > 32<<10 {
 				data = []byte(`{"error":"tool result exceeds 32 KiB; request a smaller page or targeted evidence"}`)
 				if err := emit(chatEvent{Type: "tool_error", Tool: name, Text: string(data)}); err != nil {
 					return err

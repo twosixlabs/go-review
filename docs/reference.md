@@ -941,11 +941,11 @@ short tests, retaining valid independent entries when siblings fail. Configured
 semantic retrieval is prepared once for the pinned reports and supplies candidates,
 not automatic citations or proof of equivalence. Index/provider failure remains
 explicit without erasing independently supported deterministic evidence.
-Judgment conversations permit at most eight provider requests and 4096 output
-tokens per response. Investigation leaves room for submission and bounded
-corrections within the same request budget. Repeated identical submission errors, excessive corrections
-and repeated identical evidence requests stop with an explicit error rather than
-continuing an inference loop.
+Judgment conversations honor explicitly configured `maxSteps` and `contextBytes`
+limits. When omitted, Test Quality does not impose its own request-count,
+context-byte or output-token caps; provider limits and errors still apply.
+Repeated identical submission errors and evidence requests stop with an explicit
+error rather than continuing an inference loop.
 Explicit live evaluation retains request, response, MCP-read and admission
 trajectories through `GO_REVIEW_QUALITY_TRACE_DIR`; ordinary assessments do not
 persist these full-context traces. It checks delivery of explained, evidence-
@@ -1004,8 +1004,7 @@ preserve the chosen `assessmentID`. Operations:
   `diagnostic-attempts` also uses the selected `runIndex`. Failed attempts retain
   artifact hashes and source verification independently of passing/failing
   outcomes. These reads do not repeat the diagnostic.
-- `source`: qualified `snapshotID`, `fileID`, `startLine`/`endLine`;
-  at most 500 lines and 24,000 source bytes per request.
+- `source`: qualified `snapshotID`, `fileID`, `startLine`/`endLine`.
 - `evidence`: `snapshotID`, `evidenceOperation` and `args`; operations include
   `catalog`, `source`, `coverage`, `search`, `evidence`, `dataflow`, `logical`,
   `document`, `packages`, `symbols`, and `test-runs`. `symbols` pages production
@@ -1013,11 +1012,9 @@ preserve the chosen `assessmentID`. Operations:
   `coverage` takes a **production** `symbolID` and pagination;
   shared evidence operations return available sections and continuation cursors.
 
-Result queries are bounded to 32 KiB. Paged results stop at the byte bound as
-well as the requested row count; always follow `nextOffset`. Nested collective
-conditions and diagnostic attempts/artifacts have separate readers, so even
-large records remain accessible. Unpaged oversized detail/source still requires
-a narrower request.
+Paged results use the requested row count; follow `nextOffset`. Nested collective
+conditions and diagnostic attempts/artifacts have separate readers. Saved Test
+Quality results and retained source are not rejected based on their byte size.
 Assessment snapshot IDs belong to the archive and are not interchangeable with
 current Application snapshot IDs. Chat refreshes the selected saved assessment,
 test or cited source every turn, and can propose validated navigation.

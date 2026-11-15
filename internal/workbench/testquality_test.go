@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/review"
 	"github.com/russellbrasser/go-review/internal/testquality"
@@ -29,6 +31,66 @@ func qualityFixture(t *testing.T) *Server {
 	s.qualityStore = testquality.Store{Directory: t.TempDir()}
 	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: "http://127.0.0.1:12345", Model: "fake"})
 	return s
+}
+
+func TestQualityLargeSavedResultThroughHTTPAndMCP(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("retained advice ", 3000)
+	a.Items[0].Reason = long
+	if err := s.qualityStore.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	input := testquality.QueryInput{AssessmentID: a.ID, Operation: "test", SnapshotID: a.Items[0].Identity.SnapshotID, SymbolID: a.Items[0].Identity.SymbolID}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := qualityRequest(t, s, "/api/test-quality/query", string(body))
+	if response.Code != 200 || !strings.Contains(response.Body.String(), long) {
+		t.Fatalf("HTTP lost retained advice: status=%d", response.Code)
+	}
+	st, ct := mcp.NewInMemoryTransports()
+	server, err := s.newChatService().server().Connect(t.Context(), st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name: "large-quality-result", Version: "1"}, nil)
+	session, err := client.Connect(t.Context(), ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "review_test_quality", Arguments: input})
+	if err != nil || result.IsError {
+		t.Fatalf("MCP lost retained advice: %+v %v", result, err)
+	}
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil || !strings.Contains(string(encoded), long) {
+		t.Fatalf("MCP response lost retained advice: %v", err)
+	}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []intelligence.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if !strings.Contains(request.Messages[len(request.Messages)-1].Content, long) {
+			t.Error("chat lost retained advice")
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Retained advice.\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer provider.Close()
+	err = s.runChat(t.Context(), intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture"}, chatRequest{Message: "Explain the saved result", AssessmentID: a.ID, Context: body}, nil, s.newChatService(), func(chatEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("chat could not open retained advice: %v", err)
+	}
 }
 
 func qualityRequest(t *testing.T, s *Server, path, body string) *httptest.ResponseRecorder {

@@ -69,10 +69,6 @@ func (a *Assessment) sourcePage(ctx context.Context, c Citation) (json.RawMessag
 	if c.StartLine < 1 || c.EndLine < c.StartLine || c.EndLine > len(lines) {
 		return nil, c, fmt.Errorf("invalid retained source range")
 	}
-	c.EndLine = min(c.EndLine, c.StartLine+199)
-	for c.EndLine > c.StartLine && len(strings.Join(lines[c.StartLine-1:c.EndLine], "\n")) > 12000 {
-		c.EndLine--
-	}
 	var numbered strings.Builder
 	for i, line := range lines[c.StartLine-1 : c.EndLine] {
 		if i > 0 {
@@ -81,9 +77,6 @@ func (a *Assessment) sourcePage(ctx context.Context, c Citation) (json.RawMessag
 		fmt.Fprintf(&numbered, "%d: %s", c.StartLine+i, line)
 	}
 	text := numbered.String()
-	if len(text) > 24000 {
-		return nil, c, fmt.Errorf("indivisible source line exceeds evidence budget")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, c, err
 	}
@@ -377,20 +370,20 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 		}
 		return nil
 	}
-	provider := intelligence.Provider{Config: cfg, MaxOutputTokens: 4096}
+	provider := intelligence.Provider{Config: cfg, UnboundedOutput: true}
 	started := time.Now()
 	defer func() { a.Review.ElapsedMillis += time.Since(started).Milliseconds() }()
-	submissions, previousError, repeatedError := 0, "", 0
+	previousError, repeatedError := "", 0
 	var lastSubmissionError error
 	readRequests := map[string]bool{}
 	final := false
 	var references map[string]Citation
-	limit := min(cfg.StepLimit(), 8)
+	limit := cfg.MaxSteps
 	// Investigation shares the request budget with submission and correction.
 	investigationLimit := max(1, limit-3)
-	for step := 0; step < limit; step++ {
+	for step := 0; limit == 0 || step < limit; step++ {
 		requestTools := tools
-		if final || step == limit-1 || step >= investigationLimit {
+		if final || limit > 0 && (step == limit-1 || step >= investigationLimit) {
 			if references == nil {
 				// Grading receives retained data and actual tool results, not
 				// provisional prose judgments from investigation.
@@ -425,7 +418,7 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 		if err != nil {
 			return nil, err
 		}
-		if len(encoded)+len(toolData)+len(provider.ResponseSchema) > cfg.ContextLimit() {
+		if cfg.ContextBytes > 0 && len(encoded)+len(toolData)+len(provider.ResponseSchema) > cfg.ContextBytes {
 			return nil, fmt.Errorf("semantic context budget exhausted; discovery remains partial")
 		}
 		a.Review.Requests++
@@ -449,13 +442,9 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 			return nil, err
 		}
 		a.Review.OutputBytes += len(raw)
-		if len(raw) > 32<<10 {
-			return nil, fmt.Errorf("semantic response exceeds output budget")
-		}
 		messages = append(messages, answer)
 		if final {
 			raw := json.RawMessage(answer.Content)
-			submissions++
 			expanded, err := expandCitationReferences(raw, references)
 			if err == nil {
 				err = accept(expanded, seen)
@@ -476,7 +465,7 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 			} else {
 				previousError, repeatedError = err.Error(), 1
 			}
-			if repeatedError >= 2 || submissions >= 3 {
+			if repeatedError >= 2 {
 				return nil, fmt.Errorf("semantic submission correction budget exhausted: %w", err)
 			}
 			messages = append(messages, intelligence.Message{Role: "user", Content: err.Error() + "\nCorrect the JSON assessment."})

@@ -185,13 +185,10 @@ func Evidence(ctx context.Context, a *Assessment, input EvidenceInput) (json.Raw
 				if args.EndLine == 0 {
 					args.EndLine = min(len(lines), args.StartLine+99)
 				}
-				if args.StartLine < 1 || args.EndLine < args.StartLine || args.EndLine > len(lines) || args.EndLine-args.StartLine >= 500 {
-					return nil, fmt.Errorf("invalid source range; read 1-500 retained lines")
+				if args.StartLine < 1 || args.EndLine < args.StartLine || args.EndLine > len(lines) {
+					return nil, fmt.Errorf("invalid retained source range")
 				}
 				text := strings.Join(lines[args.StartLine-1:args.EndLine], "\n")
-				if len(text) > 24000 {
-					return nil, fmt.Errorf("source page exceeds 24000 bytes; request fewer lines")
-				}
 				return json.Marshal(map[string]any{"snapshotID": input.SnapshotID, "fileID": f.ID, "path": f.Path, "sha256": f.SHA256, "startLine": args.StartLine, "endLine": args.EndLine, "text": text, "totalLines": len(lines)})
 			}
 		}
