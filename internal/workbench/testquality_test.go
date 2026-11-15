@@ -19,8 +19,11 @@ func qualityFixture(t *testing.T) *Server {
 	t.Helper()
 	root := t.TempDir()
 	text := "package example\nfunc F() int { return 1 }\n"
+	tests := "package example\nimport \"testing\"\nfunc TestF(t *testing.T) { if F()!=1 { t.Fatal(\"wrong\") } }\n"
 	r := &review.Report{Root: root, Module: "example", SourceSHA256: "source",
-		Files:   []review.File{{ID: "f", Path: "f.go", Source: text, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(text)))}},
+		Files: []review.File{{ID: "f", Package: "example", Path: "f.go", Source: text, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(text)))}},
+		TestSources: []review.TestSource{{File: review.File{ID: "test", Package: "example", Path: "f_test.go", Source: tests, SHA256: testquality.Digest([]byte(tests))},
+			Declarations: []review.TestDeclaration{{ID: "TestF", Name: "TestF", Kind: "test", Location: review.Location{FileID: "test", Line: 3, EndLine: 3}}}}},
 		Symbols: []review.Symbol{{ID: "F", Name: "F", Kind: "function", Package: "example", Location: review.Location{FileID: "f", Line: 2, EndLine: 2}}}}
 	s := NewReviewed(&review.RepositoryReview{Root: root, Directory: "review-one", Modules: []review.ReviewedModule{{Report: r}}})
 	s.qualityStore = testquality.Store{Directory: t.TempDir()}
@@ -99,7 +102,7 @@ func TestQualityFinishesAndQueriesSavedEvidence(t *testing.T) {
 	s.qualityAssess = func(_ context.Context, a *testquality.Assessment, item testquality.Responsibility, _ intelligence.Config) (testquality.Responsibility, error) {
 		value := 3
 		item.Status = testquality.StatusScored
-		for _, d := range []testquality.Dimension{testquality.AssertionStrength, testquality.RepresentativeCases, testquality.BehaviorPaths} {
+		for _, d := range []testquality.Dimension{testquality.AssertionStrength, testquality.Craftsmanship} {
 			item.Ratings = append(item.Ratings, testquality.Rating{Dimension: d, State: testquality.RatingAssessed, Value: &value, Rationale: "Tests check observable behavior.", Evidence: []testquality.Citation{{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}}})
 		}
 		return item, nil
@@ -126,8 +129,8 @@ func TestQualityFinishesAndQueriesSavedEvidence(t *testing.T) {
 	}
 	other := qualityFixture(t)
 	other.qualityStore = s.qualityStore
-	w = qualityRequest(t, other, "/api/test-quality/query", `{"assessmentID":"`+launch.ID+`","operation":"responsibilities"}`)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"symbolID":"F"`) {
+	w = qualityRequest(t, other, "/api/test-quality/query", `{"assessmentID":"`+launch.ID+`","operation":"tests"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"symbolID":"TestF"`) {
 		t.Fatalf("reopened: %s", w.Body.String())
 	}
 }

@@ -35,8 +35,11 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 type Provider struct {
-	Config      Config
-	RequireTool bool
+	Config          Config
+	RequireTool     bool
+	MaxOutputTokens int
+	ResponseSchema  json.RawMessage
+	SchemaName      string
 }
 
 // Complete assembles indexed tool-call fragments while forwarding only user-facing
@@ -49,7 +52,29 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 	if !p.Config.Enabled {
 		return result, fmt.Errorf("review agent is disabled")
 	}
+	tokens := p.MaxOutputTokens
+	if tokens == 0 {
+		tokens = 8192
+	}
+	if tokens < 256 || tokens > 8192 {
+		return result, fmt.Errorf("provider output token budget must be 256-8192")
+	}
 	choice := ""
+	var responseFormat json.RawMessage
+	if len(p.ResponseSchema) > 0 {
+		if len(tools) > 0 {
+			return result, fmt.Errorf("structured submission cannot include evidence tools")
+		}
+		name := p.SchemaName
+		if name == "" {
+			name = "review_judgment"
+		}
+		var err error
+		responseFormat, err = json.Marshal(map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": name, "strict": true, "schema": p.ResponseSchema}})
+		if err != nil {
+			return result, fmt.Errorf("structured response schema: %w", err)
+		}
+	}
 	if len(tools) > 0 {
 		choice = "auto"
 		if p.RequireTool {
@@ -57,14 +82,15 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		}
 	}
 	body, err := json.Marshal(struct {
-		Model       string    `json:"model"`
-		Messages    []Message `json:"messages"`
-		Tools       []Tool    `json:"tools,omitempty"`
-		Stream      bool      `json:"stream"`
-		MaxTokens   int       `json:"max_tokens"`
-		Temperature float64   `json:"temperature"`
-		ToolChoice  string    `json:"tool_choice,omitempty"`
-	}{p.Config.Model, messages, tools, true, 8192, .2, choice})
+		Model          string          `json:"model"`
+		Messages       []Message       `json:"messages"`
+		Tools          []Tool          `json:"tools,omitempty"`
+		Stream         bool            `json:"stream"`
+		MaxTokens      int             `json:"max_tokens"`
+		Temperature    float64         `json:"temperature"`
+		ToolChoice     string          `json:"tool_choice,omitempty"`
+		ResponseFormat json.RawMessage `json:"response_format,omitempty"`
+	}{p.Config.Model, messages, tools, true, tokens, .2, choice, responseFormat})
 	if err != nil {
 		return result, err
 	}

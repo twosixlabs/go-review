@@ -7,9 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -47,7 +44,7 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 	if _, err := rand.Read(id); err != nil {
 		return nil, err
 	}
-	a := &Assessment{ID: hex.EncodeToString(id), Version: RubricVersion, Root: run.Root, ReviewID: run.Directory,
+	a := &Assessment{ID: hex.EncodeToString(id), Version: EvidenceRubricVersion, Root: run.Root, ReviewID: run.Directory,
 		Status: "queued", Provider: provider, Model: model, CreatedAt: time.Now().UTC(), Items: []Responsibility{}}
 	dir := filepath.Join(s.Directory, a.ID)
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -145,53 +142,31 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 			return nil, err
 		}
 		a.Reports = append(a.Reports, PinnedReport{SnapshotID: snapshot, SHA256: Digest(pinnedJSON), Report: &r})
-		// Symbol presence is not proof of an assessable body (for example
-		// assembly-backed declarations). Keep these in scope as insufficient.
-		bodies := map[string]map[int]bool{}
-		for _, file := range r.Files {
-			set := token.NewFileSet()
-			parsed, parseErr := parser.ParseFile(set, file.Path, file.Source, 0)
-			bodies[file.ID] = map[int]bool{}
-			if parseErr != nil {
-				continue
-			}
-			for _, decl := range parsed.Decls {
-				if fn, ok := decl.(*ast.FuncDecl); ok {
-					bodies[file.ID][set.Position(fn.Pos()).Line] = fn.Body != nil
+		for _, source := range r.TestSources {
+			for _, test := range source.Declarations {
+				if test.Name == "TestMain" || test.Kind != "test" && test.Kind != "example" && test.Kind != "fuzz" {
+					continue
 				}
-			}
-		}
-		for _, symbol := range r.Symbols {
-			if symbol.Kind != "function" && symbol.Kind != "method" {
-				continue
-			}
-			var file *review.File
-			for j := range r.Files {
-				if r.Files[j].ID == symbol.FileID {
-					file = &r.Files[j]
-					break
+				item := Responsibility{
+					Identity: Identity{SnapshotID: snapshot, Module: r.Module, SymbolID: test.ID},
+					Name:     test.Name, Package: source.File.Package, Status: StatusUnreviewed, TestKind: test.Kind,
+					Declaration: Citation{SnapshotID: snapshot, FileID: source.File.ID, StartLine: test.Location.Line, EndLine: test.Location.EndLine},
 				}
-			}
-			testSource := false
-			for _, test := range r.TestSources {
-				if test.File.ID == symbol.FileID {
-					testSource = true
-					break
+				for _, excluded := range source.ExcludedRanges {
+					if test.Location.Line >= excluded.Line && test.Location.EndLine <= excluded.EndLine {
+						item.Status = StatusExcluded
+						item.Reason = "Test excluded by the retained review scope."
+					}
 				}
+				if item.Status != StatusExcluded && (test.Location.Line < 1 || test.Location.EndLine < test.Location.Line) {
+					item.Status = StatusInsufficient
+					item.Reason = "Retained test declaration source is unavailable."
+				}
+				a.Items = append(a.Items, item)
 			}
-			if testSource || file != nil && strings.HasSuffix(file.Path, "_test.go") {
-				continue
-			}
-			item := Responsibility{Identity: Identity{SnapshotID: snapshot, Module: r.Module, SymbolID: symbol.ID},
-				Name: symbol.Name, Package: symbol.Package, Status: StatusUnreviewed}
-			if file == nil || !bodies[symbol.FileID][symbol.Line] {
-				item.Status = StatusInsufficient
-				item.Reason = "Declaration source body is unavailable."
-			}
-			a.Items = append(a.Items, item)
 		}
 	}
-	if _, err := Aggregate(a.Items); err != nil {
+	if _, err := AggregateVersion(a.Version, a.Items); err != nil {
 		return nil, err
 	}
 	if err := s.Save(a); err != nil {
@@ -209,11 +184,7 @@ func contained(root, path string) bool {
 }
 
 func validateSources(r *review.Report) error {
-	files := append(append([]review.File{}, r.Files...), r.SupportingFiles...)
-	for _, test := range r.TestSources {
-		files = append(files, test.File)
-	}
-	for _, file := range files {
+	for _, file := range files(r) {
 		if file.Path == "" || filepath.IsAbs(file.Path) || !contained("/retained", filepath.Join("/retained", file.Path)) {
 			return fmt.Errorf("invalid retained source path %q", file.Path)
 		}
@@ -230,36 +201,13 @@ func (s Store) Save(a *Assessment) error {
 	if !assessmentID.MatchString(a.ID) {
 		return fmt.Errorf("invalid assessment ID")
 	}
-	if _, err := Aggregate(a.Items); err != nil {
+	summary, err := AggregateVersion(a.Version, a.Items)
+	if err != nil {
 		return err
 	}
+	a.SavedSummary = &summary
 	a.UpdatedAt = time.Now().UTC()
-	data, err := json.Marshal(a)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Join(s.Directory, a.ID)
-	f, err := os.CreateTemp(dir, "checkpoint-")
-	if err != nil {
-		return fmt.Errorf("create assessment checkpoint: %w", err)
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return fmt.Errorf("write assessment: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, filepath.Join(dir, "assessment.json")); err != nil {
-		return fmt.Errorf("publish assessment: %w", err)
-	}
-	return nil
+	return s.saveEvidence(a)
 }
 
 func (s Store) Load(id string) (*Assessment, error) {
@@ -270,14 +218,25 @@ func (s Store) Load(id string) (*Assessment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load assessment: %w", err)
 	}
-	var a Assessment
-	if err := json.Unmarshal(data, &a); err != nil {
+	var header struct{ Version string }
+	if err := json.Unmarshal(data, &header); err != nil {
 		return nil, fmt.Errorf("decode assessment: %w", err)
 	}
-	if a.ID != id || a.Version != RubricVersion {
+	if header.Version != EvidenceRubricVersion {
+		return nil, fmt.Errorf("unsupported Test Quality version %q; start a new assessment", header.Version)
+	}
+	loaded, err := s.loadEvidence(id, data)
+	if err != nil {
+		return nil, err
+	}
+	return s.verifyLoaded(id, loaded)
+}
+
+func (s Store) verifyLoaded(id string, a *Assessment) (*Assessment, error) {
+	if a.ID != id || a.Version != EvidenceRubricVersion {
 		return nil, fmt.Errorf("assessment identity or rubric version mismatch")
 	}
-	if _, err := Aggregate(a.Items); err != nil {
+	if _, err := AggregateVersion(a.Version, a.Items); err != nil {
 		return nil, err
 	}
 	for _, r := range a.Reports {
@@ -295,7 +254,11 @@ func (s Store) Load(id string) (*Assessment, error) {
 			return nil, fmt.Errorf("pinned report digest mismatch")
 		}
 	}
-	for _, artifact := range a.Artifacts {
+	artifacts := append([]Artifact{}, a.Artifacts...)
+	for _, diagnostic := range a.Diagnostics {
+		artifacts = append(artifacts, diagnostic.Artifacts...)
+	}
+	for _, artifact := range artifacts {
 		owner := filepath.Join(s.Directory, id)
 		real, err := filepath.EvalSymlinks(artifact.Path)
 		if err != nil {
@@ -325,23 +288,17 @@ func (s Store) Load(id string) (*Assessment, error) {
 			return nil, fmt.Errorf("retained artifact digest mismatch: %s", artifact.Path)
 		}
 	}
-	return &a, nil
+	return a, nil
 }
 
 func (s Store) List(root string) ([]*Assessment, error) {
-	entries, err := os.ReadDir(s.Directory)
-	if os.IsNotExist(err) {
-		return []*Assessment{}, nil
-	}
+	entries, err := s.ListSummaries(root)
 	if err != nil {
 		return nil, err
 	}
 	var out []*Assessment
-	for _, e := range entries {
-		if !e.IsDir() || !assessmentID.MatchString(e.Name()) {
-			continue
-		}
-		a, err := s.Load(e.Name())
+	for _, entry := range entries {
+		a, err := s.Load(entry.ID)
 		if err != nil {
 			return nil, err
 		}

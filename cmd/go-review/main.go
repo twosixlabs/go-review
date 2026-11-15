@@ -124,6 +124,23 @@ func main() {
 		log.Fatal(err)
 	}
 	work.ConfigureAgent(agentConfig)
+	embeddingPath, err := intelligence.EmbeddingConfigPath()
+	if err != nil {
+		log.Fatal(err)
+	}
+	embeddingConfig, err := intelligence.LoadEmbeddingConfig(embeddingPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if embeddingConfig.Enabled {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := work.ConfigureEmbeddings(embeddingConfig, filepath.Join(cache, "go-review", "embeddings")); err != nil {
+			log.Fatal(err)
+		}
+	}
 	server := &http.Server{Handler: work.Handler(), ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -136,6 +153,9 @@ func main() {
 		}
 		if err := work.ShutdownTestQuality(shutdown); err != nil {
 			log.Printf("stop test quality assessment: %v", err)
+		}
+		if err := work.ShutdownRetrieval(shutdown); err != nil {
+			log.Printf("stop semantic retrieval: %v", err)
 		}
 		if err := server.Shutdown(shutdown); err != nil {
 			log.Printf("stop review server: %v", err)

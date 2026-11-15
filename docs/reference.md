@@ -5,6 +5,94 @@ start with the [user guide](../README.md). This page preserves detailed collecti
 query, interpretation and development reference material.
 Shell commands on this page assume the repository root as the working directory.
 
+## Optional semantic retrieval
+
+Embeddings use `embeddings.json` in the same OS configuration directory as
+`agent.json`, independently of Chat. Missing/disabled configuration leaves
+literal search and ordinary review available. Restart after changes.
+
+```json
+{
+  "enabled": true,
+  "protocol": "ollama",
+  "baseURL": "http://127.0.0.1:11434",
+  "model": "your-installed-embedding-model",
+  "generation": "operator-controlled-model-generation",
+  "queryPrefix": "",
+  "documentPrefix": "",
+  "inputBytes": 4096,
+  "batchBytes": 32768
+}
+```
+
+- `openai`: configured-resource `GET /models/{model}` and `POST /embeddings`;
+  include `/v1` in `baseURL` when the provider requires it.
+- `ollama`: configured-model `POST /api/show` and `POST /api/embed`, with
+  `truncate:false`. Do not include `/api` in `baseURL`.
+- HTTP is allowed only for loopback; external endpoints require HTTPS.
+  Redirects and automatic fallback are disabled. `apiKeyEnv` can name a
+  credential environment variable; do not put credentials in reviewed source.
+- Discovery never lists available models or guesses capabilities/prefixes from
+  model names. Unsupported metadata is reported explicitly. Authentication,
+  transport and encoding errors remain visible.
+- Vector dimensions are observed and validated across responses. Prefixes must
+  be configured according to the chosen model's requirements. Byte budgets bound
+  application inputs/batches; they are **not** inferred token/context limits.
+  Allowed input budget: 256-1048576 bytes; batch: 256-4194304 bytes, at least as
+  large as one input. Prefixes must leave at least 128 bytes for content.
+
+**Prepare index** starts an owned, cancellable job on an exact retained snapshot.
+It sends source only after explicit preparation (and separate external-source
+consent). Indexing includes retained production/test declarations and documents,
+not supporting-only files or excluded test declarations. Long declarations use
+bounded windows with short neighboring-line overlap; Markdown headings outside
+fences separate document sections. Identifier/operator context is deterministic
+observed syntax, not a generated behavioral contract.
+
+Retrieval combines lexical and embedding ranks with stable ties and protected
+whole-literal matches. Bounded call/reference expansion has separate provenance;
+same-package bare-call-name links are explicitly unresolved candidates, not
+type-checked call edges. Large declaration code queries use their first bounded
+chunk and report that limitation. Original source hashes, identities and ranges
+remain attached to candidates. Reading candidates does not authorize test-quality
+citations: the agent must still read the corresponding source evidence.
+
+The initial preparation also runs small synthetic retrieval trials on **only**
+the configured model, comparing raw/structural representations for text-code and
+code-code. Target ranks and ties (including the target) are visible in the panel
+and status profile. Constant vectors correctly leave all candidates tied.
+Trials are observations, not proof of general code understanding or provenance.
+They do not silently enable extra views or chat reranking.
+
+Unchanged declarations reuse parsed representations and embeddings; model
+requests are serialized in byte-bounded batches. Repeated query embeddings are
+cached. Status counters describe **corpus** encoding requests/input bytes,
+completed/reused chunks and parsed units, excluding discovery, synthetic trials
+and query requests. They do not claim token counts.
+
+Cache data lives under the OS user cache directory in `go-review/embeddings`.
+Vector blobs/manifests contain input hashes, retained names/ranges and
+model-derived vectors (not raw source inputs);
+treat them as private project evidence. Reuse is isolated by endpoint, protocol,
+configured/returned model identity, dimensions, prefixes, budgets and format.
+An explicitly reported/configured `revision` or operator-maintained `generation`
+allows persistent reuse; without one, reuse is session-local only. Change
+generation when replacing an alias's underlying model. Hidden endpoint changes
+cannot be reliably detected from a name.
+
+HTTP: `GET /api/retrieval/status`, `POST /api/retrieval/index`
+(`snapshotID`, `action: start|cancel`, `confirmExternal`), and
+`POST /api/retrieval/query` (`snapshotID`, `query` **or** `entityID`, `offset`,
+`limit`). MCP `review_retrieve` shares the same read-only candidate results.
+Queries never implicitly build an index. Chat advertises retrieval only for a
+ready selected snapshot; assessment retrieval uses its validated pinned snapshot.
+
+Run `scripts/test-agent-capabilities.sh embedding-live` to test the configured
+endpoint with synthetic data only. Missing/disabled configuration explicitly
+skips semantic validation; configured endpoint errors fail rather than switch
+models. No model assets are installed or downloaded. Retrieval uses configured
+endpoint inference and supplies candidates to the current Test Quality workflow.
+
 ## Optional review assistant
 
 The **Chat** button opens an evidence-backed assistant. It uses the same
@@ -714,7 +802,8 @@ For an unchanged lockfile use `npm ci --ignore-scripts`. Run frontend tests with
 
 **Assess → Test Quality** is a separately launched, project-wide background AI
 review. It uses the existing assistant configuration and provider transport;
-AI-disabled browsing and saved-result access do not require a provider.
+AI-disabled launches retain deterministic facts and authorized diagnostic observations
+without model judgments. Browsing and saved-result access do not require a provider.
 External-provider launches require explicit source/evidence-transfer consent.
 Credentials are not stored in assessments.
 
@@ -723,43 +812,155 @@ source, coverage and referenced execution artifacts into independent private
 storage under the OS user cache, `go-review/test-quality`. Source/report and
 artifact hashes are verified on reload. Replacing the current repository review
 cannot invalidate these copies. Each assessment records the provider/model,
-rubric version, snapshot-qualified function identities and timestamps.
+rubric version, snapshot-qualified test-declaration identities and timestamps.
 
 The host processes one assessment at a time with at most two waiting jobs.
-Duplicate starts against the same retained review return its active job.
+Duplicate starts against the same retained review and execution authorization return its active job.
 Provider settings and source snapshots are fixed at launch. Navigation, module
 selection and chat cannot change or cancel that work. **Cancel assessment**
-stops provider work and preserves completed function results. Graceful shutdown
+stops provider work and preserves completed test results. Graceful shutdown
 cancels and waits; after an unexpected stop, unfinished saved jobs are marked
 **interrupted**, never automatically resumed or sent back to a model.
 
 ### Rubric and scope
 
-Rubric `test-quality/1` uses these equally weighted dimensions:
+New launches use `test-quality/3`, assessing tests and their collective suite,
+not production components or functions:
+
+**Purpose: guide human review, not certify test quality.** Ratings, plausible
+gaps and suggested improvements are advisory interpretations. They may be
+incomplete, debatable or inconsistent; inspect their evidence and decide.
 
 | Dimension | Assesses |
 |---|---|
 | Assertion strength | Checks on observable outputs, errors, state and meaningful effects, rather than invocation alone |
-| Representative cases | Relevant normal, boundary, invalid-input and state partitions, not arbitrary case counts |
-| Behavior paths | Important production responsibilities and alternatives in light of source and recorded execution |
+| Test craftsmanship (individual) | Intent, structure, helpers/mocks, isolation and maintainability |
+| Behavior adequacy (collective) | Complementary tests meaningfully asserting established expected behaviors |
+| Conditions/usage adequacy (collective) | The combined meaningful range of conditions and usage for those behaviors |
 
 Ratings are integers: **0** absent/ineffective, **1** weak with major gaps,
 **2** meaningful with material gaps, **3** strong with limited gaps,
 **4** convincing and proportionate. Each requires rationale and read-source
 citations. Inapplicable dimensions need a rationale and no value. Unknown
-applicable evidence prevents a function score; it is not assigned zero.
+applicable evidence remains unknown, not zero; independently supported dimensions remain visible.
 
-`function score = 25 × mean applicable rating`; the project score is the equal
-mean of scored function scores. The population consists of distinct retained
-production function/method declarations qualified by snapshot, module and symbol;
-closures contribute to their enclosing declaration. Bodyless/unavailable
-declarations remain counted as insufficient. Recorded collection exclusions
-remain visible through retained evidence; declarations removed by that scope
-are not reconstructed or counted as reviewed.
+`test score = 25 × mean applicable rating`; the project score is the equal mean
+of tests with supported individual ratings. This is not a collective suite score.
+The population is retained Go test, example and fuzz
+seed-test declarations, qualified by snapshot, module and test-declaration ID.
+Table cases and subtests are assessed within their enclosing test; benchmarks,
+`TestMain`, helpers and production functions are not separate assessment jobs.
+Retained name exclusions count as excluded tests; files omitted by review scope
+are not reconstructed. The agent receives the selected test source first,
+must inspect its complete body, and must cite that test for each rating.
+Related tests, helper/mock implementations and production declarations remain
+read-only context. Missing production coverage is not a test-quality score.
+
+Only `test-quality/3` assessments are supported. Obsolete archives are rejected
+on direct access and omitted from listings with a diagnostic. Stored archives
+are not deleted or converted; start a new assessment for current advice.
+
+### Evidence-first execution and storage
+
+`POST /api/test-quality/start` accepts optional `allowExecution`; omission means
+true, explicit false absolutely prohibits fresh execution. The UI shows this
+default-on authorization before launch. The system selects useful bounded
+diagnostics from source-verified retained evaluated membership, without manual
+test reselection. No reviewed pool means no fresh execution. Static sleep or
+package-state-write risks can select limited repeats; passing repeats are not
+proof of reliability. Rerun/repeat/shuffle/race requests are typed and independently
+validated; arbitrary commands, unknown targets, benchmarks and fuzz campaigns
+are rejected. Shuffle requires multiple eligible top-level tests in a package.
+At most eight diagnostic test commands and three repetitions are authorized.
+Each attempt, explicit shuffle seed, command, failure and artifact is retained
+separately from the original reports. Navigation and queries never execute tests.
+
+Retained sources are parsed once per job and shared helper facts are memoized.
+Source facts also list separate `if`/`for` predicate alternatives for uniquely
+resolved same-package production functions and safely resolvable literal test
+inputs. Their `potentialTruth` is a static interpretation, not proof of execution,
+path reachability, an effective assertion or an intended contract. Mutable,
+escaped or dynamically generated inputs stay unknown. This bounded analysis does
+not claim complete condition discovery or solve arbitrary data flow.
+For two direct integer range comparisons of the same unchanged parameter,
+`mutuallyExclusive` records when their intersection is empty. Those alternatives
+cannot both be true; a simultaneous-input case is not a missing test. Unsupported
+comparisons and larger expressions do not acquire this inference.
+Collective review considers complementary tests, relevant behaviors and usage
+conditions. Large scopes are reviewed in related groups of at most sixteen
+tests, split further when serialized evidence exceeds the context allowance.
+Completed group observations are checkpointed with partial status while review
+continues. Group-local expectation/condition IDs are qualified to avoid
+collisions; each group observation retains its selected-test `scope`, separate
+from optional contributing-test lists. The detail view labels these observations
+as group-scoped rather than whole-suite discovery. Overall ratings are independent judgments over group contributions
+and their cited original sources, never averages of group or individual ratings.
+If a group, synthesis or checkpoint fails, completed observations and the actual
+error remain visible.
+The host does not force scores to match gap opinions or reject
+advice because its static analyzer does not recognize a checking site.
+For a source-derived condition, `predicateID` identifies its source expression,
+not a claim that it evaluates true, in older saved maps. New model submissions
+use source citations instead of specialized predicate identifiers. Condition
+maps need not enumerate every predicate alternative; explicit contributor lists
+are optional. Partial scope remains visible alongside useful advice.
+The rubrics distinguish behavior (what is asserted) from conditions/usage (under
+which inputs or circumstances); both can use the same evidence. Submission
+structure is specified by a standalone constrained JSON response schema after
+evidence gathering through assessment-pinned, read-only MCP tools. Natural
+evidence-phase prose can finish investigation but is never accepted as an
+assessment. Investigation and grading use separate instructions; only the final
+phase receives the rubric and explicit inspected-source references. Individual
+assertion strength evaluates checks present, not suite-wide missing cases.
+Individual context retains checking/helper evidence but leaves collective
+input-partition facts to the suite.
+Final grading receives retained input and actual read results, not provisional
+investigation prose. Collective input excludes prior individual AI ratings and
+findings; those judgments are not evidence of suite adequacy.
+The model schema bounds ratings to the two required
+dimensions and requires a finding's title and rationale; consequence and
+suggestion text are optional. Admission verifies usable structure, dimension
+uniqueness, retained identities and inspected-source citations—not the
+correctness of advisory opinions.
+The host retains known test metadata and derives scored/insufficient
+status from the submitted rating selections; it does not invent or adjust ratings.
+Unknown-dimension rationales explain partial status. Collective submissions are
+checked against the response schema before provenance admission, and correction
+errors retain the failing schema location. The model selects assessed values as
+rubric labels: absent, weak, material-issues, strong or convincing. The host maps
+that explicit selection to 0, 1, 2, 3 or 4 respectively; stored and query ratings
+remain numeric. A single `unknown` selection derives an unknown canonical state
+with no numeric value; collective-only `not-applicable` derives an inapplicable
+state. Individual tests do not use inapplicability to represent absent checks.
+The model cites short references to actually inspected source/checking sites;
+the host expands those references to retained coordinates before admission.
+Expectation-basis references identify contracts or source, not contributing
+checks; supported condition rows retain the test/check citations.
+Individual model calls use related source-byte-bounded batches of at most eight
+short tests, retaining valid independent entries when siblings fail. Configured
+semantic retrieval is prepared once for the pinned reports and supplies candidates,
+not automatic citations or proof of equivalence. Index/provider failure remains
+explicit without erasing independently supported deterministic evidence.
+Judgment conversations permit at most eight provider requests and 4096 output
+tokens per response. Investigation leaves room for submission and bounded
+corrections within the same request budget. Repeated identical submission errors, excessive corrections
+and repeated identical evidence requests stop with an explicit error rather than
+continuing an inference loop.
+Explicit live evaluation retains request, response, MCP-read and admission
+trajectories through `GO_REVIEW_QUALITY_TRACE_DIR`; ordinary assessments do not
+persist these full-context traces. It checks delivery of explained, evidence-
+backed advice within budgets, not exact scores, exhaustive gap maps or wording.
+
+V3 archives use immutable content-addressed report/fact blobs and independently
+changed result/diagnostic records with atomic metadata checkpoints. Active queries
+use owned in-memory state; status listing reads checkpoint metadata rather than
+rehashing all retained sources/artifacts. Opening archived evidence performs full
+digest/ownership verification. Phase timings, model request/byte counts and
+persistence write/byte counts are recorded, not inferred from test counts.
 
 The view shows scored, insufficient, excluded and unreviewed counts, category
 scores, unavailable modules, and partial/cancelled/interrupted state. No scored
-functions means an unavailable score. Reliability/design findings include
+tests means an unavailable score. Reliability/design findings include
 isolation, shared state, nondeterminism, brittle coupling, misleading names,
 mock misuse and swallowed failures when supported by evidence.
 
@@ -772,7 +973,7 @@ as objective measurements across different models, snapshots or scopes.
 
 ### Evidence and interfaces
 
-Drill down through package/function membership, ratings and findings to cited
+Drill down through package/test membership, ratings and findings to cited
 test cases, assertions and production lines. The evidence reader also exposes
 retained file catalogs, statement blocks, test-run metadata, control-flow and
 data-flow evidence. Large sources have preceding/following context controls.
@@ -790,24 +991,40 @@ Start with `operation: "assessments"` to discover IDs for the current project;
 preserve the chosen `assessmentID`. Operations:
 
 - `overview`: score, rubric version, scope and provenance.
-- `modules`, `responsibilities`, `findings`, `unavailable`: paged membership;
+- `modules`, `tests`, `findings`, `unavailable`: paged membership;
   use `offset`/`limit` (1–100) and follow `nextOffset`.
-- `responsibility`, `finding`: qualified `snapshotID` and `symbolID`;
+- `test`, `finding`: qualified `snapshotID` and `symbolID` (the retained test
+  declaration ID, not a production symbol);
   `findingIndex` selects a finding.
+- Version 3 `suite` shows collective ratings; `expectations` pages behavior
+  summaries, `expectation` and `conditions` use `expectationID`, and `condition`
+  also uses `conditionID`. `suite-findings` pages retained collective findings.
+- Version 3 `diagnostics` pages summaries with `diagnosticIndex`.
+  `diagnostic-runs` and `diagnostic-artifacts` use that index;
+  `diagnostic-attempts` also uses the selected `runIndex`. Failed attempts retain
+  artifact hashes and source verification independently of passing/failing
+  outcomes. These reads do not repeat the diagnostic.
 - `source`: qualified `snapshotID`, `fileID`, `startLine`/`endLine`;
   at most 500 lines and 24,000 source bytes per request.
 - `evidence`: `snapshotID`, `evidenceOperation` and `args`; operations include
   `catalog`, `source`, `coverage`, `search`, `evidence`, `dataflow`, `logical`,
-  `document`, and `packages`. `coverage` takes `symbolID` and pagination;
+  `document`, `packages`, `symbols`, and `test-runs`. `symbols` pages production
+  context IDs; `test-runs` takes `testName`, optional `package` and pagination.
+  `coverage` takes a **production** `symbolID` and pagination;
   shared evidence operations return available sections and continuation cursors.
 
-Result queries are bounded to 32 KiB; request smaller pages/ranges when needed.
+Result queries are bounded to 32 KiB. Paged results stop at the byte bound as
+well as the requested row count; always follow `nextOffset`. Nested collective
+conditions and diagnostic attempts/artifacts have separate readers, so even
+large records remain accessible. Unpaged oversized detail/source still requires
+a narrower request.
 Assessment snapshot IDs belong to the archive and are not interchangeable with
 current Application snapshot IDs. Chat refreshes the selected saved assessment,
-function or cited source every turn, and can propose validated navigation.
+test or cited source every turn, and can propose validated navigation.
 These read-only tools cannot launch assessment, execute tests or mutate source.
 Provider/protocol/budget failures remain explicit, with completed work retained
-and affected functions marked insufficient.
+and affected tests marked insufficient. Use `tests` and `test` for the
+current test-level readers.
 
 ## Change Review
 

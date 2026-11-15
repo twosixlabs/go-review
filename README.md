@@ -24,6 +24,7 @@ an overall quality score.*
 - [Review committed changes](#review-committed-changes)
 - [Assess unit-test quality](#assess-unit-test-quality)
 - [Use the optional assistant](#use-the-optional-assistant)
+- [Use optional semantic search](#use-optional-semantic-search)
 - [Connect an MCP client](#connect-an-mcp-client)
 - [Troubleshooting](#troubleshooting)
 - [Reference and development](#reference-and-development)
@@ -520,44 +521,75 @@ with explicit evidence limits. [Change Review reference](docs/reference.md#chang
 ## Assess unit-test quality
 
 Choose **Assess → Test Quality**, then **Start project assessment**. This uses
-the [configured assistant provider](#configure-a-model) to review retained
-production source, actual test assertions, helpers/mocks, relevant input cases,
-control/data flow and recorded statement coverage. An external provider requires
-explicit approval to send this evidence. Assessment does not execute target
-tests, run the application, edit files or automatically collect newer evidence.
+the [configured assistant provider](#configure-a-model) to assess individual
+test craftsmanship and assertion effectiveness, with separate collective
+judgments of expected behaviors and conditions/usage. Complementary focused
+tests are considered together rather than each being required to cover the suite.
+This is advisory guidance for human review, not certification: inspect the cited
+evidence and decide. Debatable scores or gap opinions do not trigger forced
+rescoring; provenance, execution permissions and resource limits remain enforced.
+Large scopes use bounded related-test groups, with their completed observations
+saved as review progresses. The overall suite ratings are a separate judgment
+over those groups and their cited sources, not an average of group ratings.
+Deterministic checking sites, literal cases, helper bindings and retained outcomes
+are collected first; they are evidence, not automatically generated quality scores.
+Production source, control/data flow and recorded coverage provide
+supporting context; production functions are **not** assessment targets.
+An external provider requires
+explicit approval to send this evidence. **Allow system-selected fresh test
+diagnostics** defaults on; uncheck it to use retained evidence only. Fresh
+diagnostics are bounded to eight commands and three repetitions and require
+source-verified membership in the previously evaluated suite. They never broaden
+to unreviewed tests, benchmarks, mutation or fuzz campaigns. Original retained
+reports/coverage stay unchanged; fresh attempts and artifacts are saved separately.
+Assessment does not run the application or edit project files.
+AI-disabled launches retain deterministic evidence without invented judgments.
 
-![Test Quality workspace showing an illustrative assessment, scope counts, rubric scores, and function ratings](docs/images/test-quality-overview.png)
+![Test Quality workspace showing saved configured-model advice, scope counts, four dimensions, and test ratings](docs/images/test-quality-overview.png)
 
-*Illustrative example data, not a real model assessment.* Use **Start project
+*Actual configured-model results on owned synthetic contracts, displayed through
+a read-only replay of archived reader responses—not Builder results or
+certification.* Use **Start project
 assessment** to launch a review, and the saved-assessment selector to reopen
 results. The score cards and scope counts distinguish partial results from
-fully assessed functions.
+fully assessed tests.
 
 The assessment runs in the background. Continue exploring or chatting; return
-through **Test Quality** to monitor progress or **Cancel assessment**. Closing
-the browser does not cancel the job while Go Review remains running. Shutdown
+through **Test Quality** to monitor progress or **Cancel assessment**.
+The progress bar shows processed tests out of the assessable total, including
+insufficient-evidence results but excluding scope exclusions. Queued work is
+indeterminate; the bar tracks work completed, not score or estimated time.
+Closing the browser does not cancel the job while Go Review remains running. Shutdown
 cancels active work and retains completed results; an interrupted assessment is
 not silently restarted.
 
-The displayed **AI-assessed score** is not measured coverage or a correctness
-certification. Its visible rubric rates assertion strength, representative
-cases, and behavior/path testing from 0–4. A function's score is 25 times its
-mean applicable rating; the project score equally weights scored functions.
+The displayed **individual test rating average** is not measured coverage, suite
+adequacy or a correctness certification. Individual craftsmanship and assertion
+ratings use 0–4; collective behavior and conditions/usage ratings are independent.
+A test's score is 25 times its mean supported applicable rating; the individual
+average equally weights tests with supported ratings. Supported dimensions remain
+visible when another dimension is unknown. One test is not expected to cover an entire production
+function; coverage already describes what production code was executed.
 Insufficient and unreviewed evidence are **unknown, not zero**. Scope counts
 always accompany the score, including partial assessments.
 
-Browse modules/packages, functions and findings, then open cited production
+Browse modules/packages, tests and findings, then open cited production
 and test lines to inspect individual cases and assertions. Statement blocks,
 test-run scope and behavior evidence are available alongside the judgment.
 Aggregate coverage does not identify which individual case exercised a path.
 
-![Illustrative cited test source with controls to read preceding and following context](docs/images/test-quality-source.png)
+![Actual saved test advice alongside its pinned synthetic test source](docs/images/test-quality-source.png)
 
 Select a citation beside a rating or finding to open the pinned source; use
 **Read preceding context** and **Read following context** to inspect nearby lines.
 Saved assessments reopen from their pinned evidence without a model call or
 the original checkout. Chat and `review_test_quality` expose the same saved
 results. [Test Quality reference](docs/reference.md#ai-test-quality).
+Table cases and subtests are reviewed within their enclosing test. Go tests,
+examples and fuzz seed tests are included; benchmarks, `TestMain` and helpers
+are not separate assessment targets. Only current `test-quality/3` assessments
+are supported. Obsolete archives are left on disk but are not read or listed;
+start a new assessment for current advice.
 
 ## Use the optional assistant
 
@@ -675,6 +707,43 @@ The expandable activity section shows tool operations and progress, not private
 model reasoning. **Clear chat** removes the current evidence snapshot's
 browser-session history.
 [Provider tuning and troubleshooting](docs/reference.md#optional-review-assistant).
+
+## Use optional semantic search
+
+**Semantic search (optional)** adds meaning-based source/document candidates
+alongside the unchanged literal search. It requires an independently configured
+embedding endpoint; enabling Chat does not enable embeddings.
+
+Create `embeddings.json` beside the machine-local `agent.json` configuration
+described above, then restart Go Review:
+
+```json
+{
+  "enabled": true,
+  "protocol": "openai",
+  "baseURL": "http://127.0.0.1:1234/v1",
+  "model": "your-installed-embedding-model"
+}
+```
+
+Choose **Prepare index** for the retained review. Preparation is explicit,
+cancellable, and shows progress; browsing never starts corpus embedding.
+External endpoints require separate authorization to transmit retained source.
+Search by description, or select a function and choose **Find code related to
+selected function**. Candidates link to original retained evidence. Chat and
+test-quality assessment can reuse a prepared index; similarity does not establish
+assertion effectiveness, test completeness, or behavioral equivalence.
+
+Only the configured model is queried. No model catalogs, downloads, alternative
+models, or GPU requirement are introduced. Dimensions are observed rather than
+fixed. Small synthetic text/code and code/code trials compare raw source with
+structural representations and show ranks/ties, not capability certification.
+If non-China provenance is required, verify both publisher and backbone before
+configuring the model; an opaque endpoint cannot establish this from its name.
+
+This delivery uses endpoint inference. Native in-process inference remains a
+separately validated follow-up. See the [semantic retrieval reference](docs/reference.md#optional-semantic-retrieval)
+for Ollama, prefixes, byte budgets, cache compatibility and limitations.
 
 ## Connect an MCP client
 

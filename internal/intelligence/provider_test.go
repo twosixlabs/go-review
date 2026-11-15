@@ -92,6 +92,34 @@ func TestAgentProvider(t *testing.T) {
 	}
 }
 
+func TestAgentProviderStructuredOutputRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Tools  []Tool `json:"tools"`
+			Format struct {
+				Type   string `json:"type"`
+				Schema struct {
+					Strict bool            `json:"strict"`
+					Schema json.RawMessage `json:"schema"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Format.Type != "json_schema" || !request.Format.Schema.Strict || len(request.Format.Schema.Schema) == 0 || len(request.Tools) != 0 {
+			t.Errorf("submission was not a standalone constrained request: %+v", request)
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer server.Close()
+	p := Provider{Config: Config{Enabled: true, BaseURL: server.URL, Model: "fixture"}, ResponseSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)}
+	answer, err := p.Complete(t.Context(), []Message{{Role: "user", Content: "Submit"}}, nil, nil)
+	if err != nil || answer.Content != `{"ok":true}` {
+		t.Fatalf("structured content lost: %+v %v", answer, err)
+	}
+}
+
 func TestAgentProviderFailures(t *testing.T) {
 	for _, body := range []string{
 		`data: not-json` + "\n\n",

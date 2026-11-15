@@ -7,7 +7,7 @@ import (
 )
 
 func rating(d Dimension, value int) Rating {
-	return Rating{Dimension: d, State: RatingAssessed, Value: &value, Rationale: "supported by retained evidence"}
+	return Rating{Dimension: d, State: RatingAssessed, Value: &value, Rationale: "supported by retained evidence", Evidence: []Citation{{SnapshotID: "snapshot", FileID: "tests", StartLine: 1, EndLine: 1}}}
 }
 
 func reviewed(symbol string, ratings ...Rating) Responsibility {
@@ -23,16 +23,16 @@ func TestAggregateScoresAndScope(t *testing.T) {
 		wantPartial bool
 	}{
 		{
-			name: "three dimensions",
+			name: "independent individual dimensions",
 			items: []Responsibility{reviewed("one",
-				rating(AssertionStrength, 4), rating(RepresentativeCases, 2), rating(BehaviorPaths, 2))},
-			wantScore: ptr(200.0 / 3), wantCounts: Counts{Scored: 1},
+				rating(AssertionStrength, 4), rating(Craftsmanship, 2))},
+			wantScore: ptr(75), wantCounts: Counts{Scored: 1},
 		},
 		{
-			name: "equal function weights and unknown scope",
+			name: "equal test weights and unknown scope",
 			items: []Responsibility{
-				reviewed("one", rating(AssertionStrength, 4), rating(RepresentativeCases, 4), rating(BehaviorPaths, 4)),
-				reviewed("two", rating(AssertionStrength, 2), rating(RepresentativeCases, 2), rating(BehaviorPaths, 2)),
+				reviewed("one", rating(AssertionStrength, 4), rating(Craftsmanship, 4)),
+				reviewed("two", rating(AssertionStrength, 2), rating(Craftsmanship, 2)),
 				{Identity: Identity{SnapshotID: "snapshot", Module: "module", SymbolID: "three"}, Status: StatusUnreviewed},
 			},
 			wantScore: ptr(75), wantCounts: Counts{Scored: 2, Unreviewed: 1}, wantPartial: true,
@@ -48,14 +48,13 @@ func TestAggregateScoresAndScope(t *testing.T) {
 		{
 			name: "inapplicable dimension excluded",
 			items: []Responsibility{reviewed("one", rating(AssertionStrength, 4),
-				Rating{Dimension: RepresentativeCases, State: RatingNotApplicable, Rationale: "not applicable"},
-				rating(BehaviorPaths, 2))},
-			wantScore: ptr(75), wantCounts: Counts{Scored: 1},
+				Rating{Dimension: Craftsmanship, State: RatingNotApplicable, Rationale: "not applicable"})},
+			wantScore: ptr(100), wantCounts: Counts{Scored: 1},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Aggregate(tt.items)
+			got, err := AggregateVersion(EvidenceRubricVersion, tt.items)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +75,7 @@ func ptr(v float64) *float64 { return &v }
 
 func TestAggregateRejectsInvalidEvidence(t *testing.T) {
 	valid := func() Responsibility {
-		return reviewed("one", rating(AssertionStrength, 3), rating(RepresentativeCases, 3), rating(BehaviorPaths, 3))
+		return reviewed("one", rating(AssertionStrength, 3), rating(Craftsmanship, 3))
 	}
 	tests := []struct {
 		name string
@@ -88,28 +87,20 @@ func TestAggregateRejectsInvalidEvidence(t *testing.T) {
 			r := valid()
 			r.Ratings[0] = rating(AssertionStrength, 5)
 			return []Responsibility{r}
-		}, "range"},
-		{"missing dimension", func() []Responsibility { r := valid(); r.Ratings = r.Ratings[:2]; return []Responsibility{r} }, "dimension"},
+		}, "0-4"},
+		{"missing dimension", func() []Responsibility { r := valid(); r.Ratings = r.Ratings[:1]; return []Responsibility{r} }, "dimension"},
 		{"duplicate dimension", func() []Responsibility { r := valid(); r.Ratings[1] = r.Ratings[0]; return []Responsibility{r} }, "duplicate"},
 		{"unknown applicable rating", func() []Responsibility {
 			r := valid()
-			r.Ratings[0] = Rating{Dimension: AssertionStrength, State: RatingUnknown}
+			r.Ratings[0] = Rating{Dimension: AssertionStrength, State: RatingUnknown, Rationale: "Unresolved assertion support"}
 			return []Responsibility{r}
 		}, "unknown"},
-		{"all inapplicable", func() []Responsibility {
-			r := valid()
-			for i := range r.Ratings {
-				r.Ratings[i].State = RatingNotApplicable
-				r.Ratings[i].Value = nil
-			}
-			return []Responsibility{r}
-		}, "applicable"},
 		{"unknown status", func() []Responsibility { r := valid(); r.Status = "mystery"; return []Responsibility{r} }, "status"},
 		{"missing identity", func() []Responsibility { r := valid(); r.Identity.SnapshotID = ""; return []Responsibility{r} }, "identity"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Aggregate(tt.make())
+			_, err := AggregateVersion(EvidenceRubricVersion, tt.make())
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("got error %v, want containing %q", err, tt.want)
 			}

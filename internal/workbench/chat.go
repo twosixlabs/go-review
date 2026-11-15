@@ -223,6 +223,7 @@ CHOOSING EVIDENCE
 - review_flow: the same progressive flow shown in the UI. review_inspect: a visible node/edge's responsibilities, comments, represented definitions and alternatives. Querying either does not move the browser.
 - review_packages: compact package counts and gauges. Select a package and an explicit section for symbols, imports, files or documentation. For a module-wide maximum, use review_overview.metrics.complexity.maximumSymbolIDs, then verify the owner with review_evidence. Do not scan packages or fetch a whole symbol inventory to rediscover a known maximum.
 - review_search: literal text search, not regex or semantic search. Search a distinctive name or term. Qualified display names may not match the searchable fields; if a qualified query misses, try the method name and disambiguate its package/signature. Use returned IDs, not guessed names as IDs.
+- review_retrieve, when available: best-effort hybrid candidates using only the configured embedding model and retained lexical/call/reference evidence. Candidates are not inspected source, verified equivalence or proof that no relevant tests exist. Read original sources before making substantive claims.
 - review_evidence(symbolID): the function's own metrics and retained check/test evidence. review_source: bounded source ranges for implementation or assertions. review_document: complete documentation. review_architecture: broader responsibility/exchange context when relevant, not a mandatory extra step.
 - review_assess: the same Review Map records, priority ordering, cohorts and filters as the UI. Missing coverage is unknown, never zero. Select findingID for its evidence or ruleID for the complete heuristic description. Signals are investigation leads, not verdicts.
 - review_dataflow: retained initial-review SSA definitions, uses and opaque boundaries. Select symbolID, then valueID/direction/depth to reproduce the UI slice. It never runs analysis. Older reviews explicitly report not-collected; unsupported functions have recorded reasons. An operand edge is not runtime chronology, alias lineage or cross-function value propagation.
@@ -397,6 +398,9 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 		if tool.Name == "review_test_quality" && !qualityAvailable {
 			continue
 		}
+		if tool.Name == "review_retrieve" && (snapshot == nil || !s.retrievalAvailable(snapshot.info.ID)) {
+			continue
+		}
 		schema, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			return err
@@ -415,8 +419,8 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 		intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "propose_change_action", Description: "Propose resolve/fetch, collect, cancel or local progress action. Does not execute; requires separate explicit human confirmation in the host.", Parameters: changeProposalSchema}})
 	if request.AssessmentID != "" {
 		tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "navigate_test_quality",
-			Description: "Show saved Test Quality overview, responsibility or cited source. Requires assessmentID; responsibility requires snapshotID and symbolID; source requires snapshotID/fileID/startLine/endLine. Uses user navigation permission; never starts assessment.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"assessmentID":{"type":"string"},"operation":{"type":"string","enum":["overview","responsibility","source"]},"snapshotID":{"type":"string"},"symbolID":{"type":"string"},"fileID":{"type":"string"},"startLine":{"type":"integer"},"endLine":{"type":"integer"}},"required":["assessmentID","operation"],"additionalProperties":false}`)}})
+			Description: "Show saved Test Quality overview, test or cited source. Requires assessmentID; test requires snapshotID and the test declaration symbolID; source requires snapshotID/fileID/startLine/endLine. Uses user navigation permission; never starts assessment.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"assessmentID":{"type":"string"},"operation":{"type":"string","enum":["overview","test","source"]},"snapshotID":{"type":"string"},"symbolID":{"type":"string"},"fileID":{"type":"string"},"startLine":{"type":"integer"},"endLine":{"type":"integer"}},"required":["assessmentID","operation"],"additionalProperties":false}`)}})
 	}
 	tools = append(tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "recall_evidence",
 		Description: "Read exact evidence archived earlier in this turn. Follow nextOffset for more text.",
@@ -588,7 +592,7 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 				d := json.NewDecoder(strings.NewReader(call.Function.Arguments))
 				d.DisallowUnknownFields()
 				if toolErr = d.Decode(&input); toolErr == nil {
-					if input.Operation != "overview" && input.Operation != "responsibility" && input.Operation != "source" {
+					if input.Operation != "overview" && input.Operation != "test" && input.Operation != "source" {
 						toolErr = fmt.Errorf("unsupported Test Quality navigation")
 					} else {
 						_, toolErr = s.queryTestQuality(ctx, input)

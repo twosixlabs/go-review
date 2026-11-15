@@ -440,5 +440,8 @@ test('endpoint selection opens overall flow, stage evidence and optional functio
       'unavailable source facts must not leave the previous activity flow visible');
     assert.match(doc.querySelector('#detail').textContent,/Overall flow unavailable/);
     assert.equal(executions,0);
-  }finally{dom.window.close();}
+  }finally{
+    await new Promise(resolve=>setImmediate(resolve));
+    dom.window.close();
+  }
 });

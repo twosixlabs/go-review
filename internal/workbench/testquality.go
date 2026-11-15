@@ -45,39 +45,44 @@ func (s *Server) qualityInit() error {
 		return err
 	}
 	s.qualityJobs = make(map[string]*qualityJob)
-	if s.qualityAssess == nil {
-		s.qualityAssess = testquality.Assess
-	}
 	s.qualityReady = true
 	return nil
 }
 
 func qualityCompact(a *testquality.Assessment) map[string]any {
-	summary, _ := testquality.Aggregate(a.Items)
+	summary, _ := testquality.AggregateVersion(a.Version, a.Items)
+	if a.Items == nil && a.SavedSummary != nil {
+		summary = *a.SavedSummary
+	}
 	summary.Partial = summary.Partial || len(a.Unavailable) > 0 || a.Status != "completed"
 	return map[string]any{"id": a.ID, "status": a.Status, "root": a.Root, "reviewID": a.ReviewID,
-		"summary": summary, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "model": a.Model}
+		"summary": summary, "unit": "test", "version": a.Version, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "model": a.Model, "phase": a.Phase, "policy": a.Policy, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence}
 }
 
 func (s *Server) qualityStart(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		ConfirmExternal bool `json:"confirmExternal"`
+		ConfirmExternal bool  `json:"confirmExternal"`
+		AllowExecution  *bool `json:"allowExecution,omitempty"`
 	}
 	if !decodeRequest(w, r, &request) {
 		return
 	}
 	cfg := s.agentConfig()
-	if !cfg.Enabled {
-		failure(w, 409, "Configure and enable the review assistant before starting Test Quality.")
-		return
-	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.Validate(); cfg.Enabled && err != nil {
 		failure(w, 400, err.Error())
 		return
 	}
-	if cfg.External() && !request.ConfirmExternal {
+	if cfg.Enabled && cfg.External() && !request.ConfirmExternal {
 		failure(w, 409, "Explicit external-provider consent is required: retained production and test source will leave this machine.")
 		return
+	}
+	if state := s.retrievalOwner(); state != nil && (intelligence.Config{BaseURL: state.config.BaseURL}).External() && !request.ConfirmExternal {
+		failure(w, 409, "Explicit external embedding-provider consent required: retained source will leave this machine.")
+		return
+	}
+	allowExecution := true
+	if request.AllowExecution != nil {
+		allowExecution = *request.AllowExecution
 	}
 	s.qualityMu.Lock()
 	defer s.qualityMu.Unlock()
@@ -114,7 +119,7 @@ func (s *Server) qualityStart(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		active++
-		if job.data.ReviewID == reviewID {
+		if job.data.ReviewID == reviewID && job.data.Version == testquality.EvidenceRubricVersion && job.data.Policy.AllowExecution == allowExecution {
 			s.mu.RUnlock()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(202)
@@ -134,6 +139,7 @@ func (s *Server) qualityStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.ReviewID = reviewID
+	a.Policy = testquality.DefaultDiagnosticPolicy(allowExecution)
 	if err := s.qualityStore.Save(a); err != nil {
 		failure(w, 500, err.Error())
 		return
@@ -145,93 +151,10 @@ func (s *Server) qualityStart(w http.ResponseWriter, r *http.Request) {
 	predecessor := s.qualityTail
 	s.qualityTail = job.done
 	s.qualityJobs[a.ID] = job
-	go s.runQuality(ctx, job, predecessor, cfg)
+	go s.runEvidenceQuality(ctx, job, predecessor, cfg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(202)
 	_ = json.NewEncoder(w).Encode(qualityCompact(a))
-}
-
-func (s *Server) runQuality(ctx context.Context, job *qualityJob, previous <-chan struct{}, cfg intelligence.Config) {
-	defer close(job.done)
-	defer job.cancel()
-	if previous != nil {
-		// A cancelled queued job must still wait before closing done; otherwise
-		// its successor could overtake the still-running predecessor.
-		<-previous
-	}
-	s.qualityMu.Lock()
-	if ctx.Err() == nil {
-		job.data.Status = "running"
-	} else {
-		job.data.Status = "cancelled"
-	}
-	err := s.qualityStore.Save(job.data)
-	s.qualityMu.Unlock()
-	var assessmentErr error
-	failed := 0
-	if err == nil && ctx.Err() == nil {
-		for i := range job.data.Items {
-			s.qualityMu.Lock()
-			item := job.data.Items[i]
-			s.qualityMu.Unlock()
-			if item.Status != testquality.StatusUnreviewed {
-				continue
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			// Reports are immutable. The agent gets only a shallow metadata copy,
-			// not the evolving results slice exposed to status/query readers.
-			input := &testquality.Assessment{ID: job.data.ID, Reports: job.data.Reports}
-			result, callErr := s.qualityAssess(ctx, input, item, cfg)
-			if ctx.Err() != nil {
-				break
-			}
-			if callErr != nil {
-				result = item
-				result.Status = testquality.StatusInsufficient
-				result.Reason = callErr.Error()
-				failed++
-				if assessmentErr == nil {
-					assessmentErr = fmt.Errorf("%s: %w", item.Name, callErr)
-				}
-			}
-			s.qualityMu.Lock()
-			job.data.Items[i] = result
-			err = s.qualityStore.Save(job.data)
-			s.qualityMu.Unlock()
-			if err != nil {
-				break
-			}
-		}
-	}
-	s.qualityMu.Lock()
-	defer s.qualityMu.Unlock()
-	if err != nil {
-		job.data.Status = "failed"
-		job.data.Error = "persist assessment: " + err.Error()
-	} else if ctx.Err() != nil {
-		job.data.Status = "cancelled"
-		job.data.Error = "Assessment cancelled; completed results were retained."
-	} else {
-		summary, summaryErr := testquality.Aggregate(job.data.Items)
-		switch {
-		case summaryErr != nil:
-			job.data.Status = "failed"
-			job.data.Error = summaryErr.Error()
-		case summary.Partial || len(job.data.Unavailable) > 0:
-			job.data.Status = "partial"
-		default:
-			job.data.Status = "completed"
-		}
-		if assessmentErr != nil {
-			job.data.Error = fmt.Sprintf("%d responsibilities could not be assessed; inspect their retained reasons. First: %v", failed, assessmentErr)
-		}
-	}
-	if saveErr := s.qualityStore.Save(job.data); saveErr != nil {
-		job.data.Status = "failed"
-		job.data.Error = "persist final assessment: " + saveErr.Error()
-	}
 }
 
 func (s *Server) qualityStatus(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +178,7 @@ func (s *Server) qualityStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.RUnlock()
 	}
-	list, err := s.qualityStore.List(root)
+	list, err := s.qualityStore.ListSummaries(root)
 	if err != nil {
 		failure(w, 500, err.Error())
 		return
@@ -319,7 +242,7 @@ func (s *Server) queryTestQuality(ctx context.Context, input testquality.QueryIn
 			root = s.report.Root
 		}
 		s.mu.RUnlock()
-		list, err := s.qualityStore.List(root)
+		list, err := s.qualityStore.ListSummaries(root)
 		if err != nil {
 			return nil, err
 		}
@@ -345,10 +268,12 @@ func (s *Server) queryTestQuality(ctx context.Context, input testquality.QueryIn
 		}
 		return json.Marshal(map[string]any{"items": rows, "total": len(list), "nextOffset": next})
 	}
-	a, err := s.qualityStore.Load(input.AssessmentID)
+	var a *testquality.Assessment
+	var err error
 	if job := s.qualityJobs[input.AssessmentID]; job != nil {
 		a = job.data
-		err = nil
+	} else {
+		a, err = s.qualityStore.Load(input.AssessmentID)
 	}
 
 	if err != nil {
@@ -359,7 +284,7 @@ func (s *Server) queryTestQuality(ctx context.Context, input testquality.QueryIn
 
 func registerTestQualityTool(server *mcp.Server, s *Server) {
 	mcp.AddTool(server, &mcp.Tool{Name: "review_test_quality",
-		Description: "Saved AI test-quality judgments; never starts jobs/tests. operation: assessments (discover IDs), overview, modules, responsibilities, responsibility/finding (snapshotID+symbolID, findingIndex), source (snapshotID+fileID+lines), evidence (snapshotID+evidenceOperation+args; catalog/source/search/evidence/dataflow/logical/document/packages). IDs belong to this archive, not Application. Page with offset/limit, follow nextOffset.",
+		Description: "Saved AI test-quality judgments; never starts jobs/tests. operation: assessments (discover IDs), overview, modules, tests, test/finding (snapshotID+symbolID, findingIndex), source (snapshotID+fileID+lines), evidence (snapshotID+evidenceOperation+args; catalog/symbols/test-runs/source/search/evidence/coverage/dataflow/logical/document/packages). symbolID identifies the TEST declaration; production IDs only supply supporting evidence. Page with offset/limit, follow nextOffset.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPointer(false)}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input testquality.QueryInput) (*mcp.CallToolResult, map[string]any, error) {
 			data, err := s.queryTestQuality(ctx, input)

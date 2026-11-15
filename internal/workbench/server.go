@@ -27,6 +27,9 @@ type Server struct {
 	reviewRunning   bool
 	reviewError     string
 	agent           intelligence.Config
+	retrievalMu     sync.Mutex
+	retrieval       *retrievalState
+	retrievalClosed bool
 	comparison      *changes.Comparison
 	changePreview   *changes.Resolved
 	changePreviewID string
@@ -68,6 +71,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/review/scope", s.reviewScope)
 	mux.HandleFunc("/api/chat/status", s.chatStatus)
 	mux.HandleFunc("/api/chat", s.chat)
+	mux.HandleFunc("/api/retrieval/status", s.retrievalStatus)
+	mux.HandleFunc("/api/retrieval/index", s.retrievalIndex)
+	mux.HandleFunc("/api/retrieval/query", s.retrievalQuery)
 	mux.HandleFunc("/api/changes/query", s.changesQuery)
 	mux.HandleFunc("/api/changes/state", s.changesState)
 	mux.HandleFunc("/api/changes/resolve", s.changesResolve)

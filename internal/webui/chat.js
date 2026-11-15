@@ -41,7 +41,7 @@ function chatCitations(parent,text,snapshotID) {
   for(const match of text.matchAll(/\[test-quality:([^\]\n]+)\]/g)) {
     if(seen.has(match[0]))continue;seen.add(match[0]);
     const [assessmentID,snapshotID,symbolID]=match[1].split('|');
-    button('Evidence · Test Quality',()=>qualityAct(()=>qualityNavigate({assessmentID,snapshotID,symbolID,operation:'responsibility'})),parent).className='chat-citation';
+    button('Evidence · Test Quality',()=>qualityAct(()=>qualityNavigate({assessmentID,snapshotID,symbolID,operation:'test'})),parent).className='chat-citation';
   }
   for(const match of text.matchAll(/\[(change|change-source):([^\]\n]+)\]/g)) {
     if(seen.has(match[0]))continue;seen.add(match[0]);

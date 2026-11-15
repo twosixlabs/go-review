@@ -78,6 +78,9 @@ type UnitEvidenceOptions struct {
 	AllTests     bool
 	ArtifactDir  string
 	RuntimeTrace bool
+	Repetitions  int
+	ShuffleSeed  string
+	Race         bool
 }
 
 type UnitEvidence struct {
@@ -99,6 +102,14 @@ type UnitTestRun struct {
 	RuntimeTracePath string            `json:"runtimeTracePath,omitempty"`
 	Runtime          *RuntimeEvidence  `json:"runtime,omitempty"`
 	Commands         []Command         `json:"commands"`
+	Attempts         []UnitTestAttempt `json:"attempts,omitempty"`
+	ShuffleSeed      string            `json:"shuffleSeed,omitempty"`
+}
+
+type UnitTestAttempt struct {
+	Test    string `json:"test"`
+	Attempt int    `json:"attempt"`
+	Outcome string `json:"outcome"`
 }
 
 // CollectUnitEvidence runs exact selections or, when AllTests is authorized,
@@ -107,6 +118,14 @@ type UnitTestRun struct {
 // Coverage is selection-level evidence; failed runs never acquire passing-test attribution.
 // The caller owns a mutable snapshot and persistent, out-of-checkout artifacts.
 func CollectUnitEvidence(ctx context.Context, r *Report, opts UnitEvidenceOptions) error {
+	if opts.Repetitions < 0 || opts.Repetitions > 3 {
+		return fmt.Errorf("diagnostic repetitions must be 1-3 or omitted")
+	}
+	if opts.ShuffleSeed != "" {
+		if _, err := strconv.ParseUint(opts.ShuffleSeed, 10, 63); err != nil {
+			return fmt.Errorf("shuffle requires an explicit nonnegative numeric seed: %w", err)
+		}
+	}
 	if opts.AllTests && len(opts.Selections) > 0 {
 		return fmt.Errorf("all-tests execution and explicit selections are mutually exclusive")
 	}
@@ -155,7 +174,29 @@ func CollectUnitEvidence(ctx context.Context, r *Report, opts UnitEvidenceOption
 	sort.Strings(packages)
 	var profiles []*Coverage
 	var failures []error
-	for index, selection := range selections {
+	type selectionExecution struct {
+		selection UnitTestSelection
+		count     int
+	}
+	executions := []selectionExecution{}
+	for _, selection := range selections {
+		count := max(1, opts.Repetitions)
+		example := false
+		for _, name := range selection.Tests {
+			example = example || strings.HasPrefix(name, "Example")
+		}
+		// Go's -count does not repeat examples. Separate invocations retain
+		// genuine attempts and let the caller budget the actual commands.
+		if example && count > 1 {
+			for i := 0; i < count; i++ {
+				executions = append(executions, selectionExecution{selection: selection, count: 1})
+			}
+		} else {
+			executions = append(executions, selectionExecution{selection: selection, count: count})
+		}
+	}
+	for index, execution := range executions {
+		selection := execution.selection
 		if ctx.Err() != nil {
 			failures = append(failures, ctx.Err())
 			break
@@ -177,7 +218,15 @@ func CollectUnitEvidence(ctx context.Context, r *Report, opts UnitEvidenceOption
 					for i, name := range selection.Tests {
 						names[i] = regexp.QuoteMeta(name)
 					}
-					args := []string{"test", "-mod=readonly", "-count=1", "-json", "-vet=off", "-covermode=atomic", "-coverpkg=" + strings.Join(packages, ","), "-coverprofile=" + run.CoveragePath}
+					repetitions := execution.count
+					args := []string{"test", "-mod=readonly", "-count=" + strconv.Itoa(repetitions), "-json", "-vet=off", "-covermode=atomic", "-coverpkg=" + strings.Join(packages, ","), "-coverprofile=" + run.CoveragePath}
+					if opts.ShuffleSeed != "" {
+						args = append(args, "-shuffle="+opts.ShuffleSeed)
+						run.ShuffleSeed = opts.ShuffleSeed
+					}
+					if opts.Race {
+						args = append(args, "-race")
+					}
 					if !opts.AllTests {
 						args = append(args, "-run=^("+strings.Join(names, "|")+")$")
 					}
@@ -192,6 +241,8 @@ func CollectUnitEvidence(ctx context.Context, r *Report, opts UnitEvidenceOption
 					e = errors.Join(e, os.WriteFile(run.EventsPath, data, 0600))
 					var outcomeErr error
 					run.Outcomes, outcomeErr = unitTestOutcomes(data)
+					e = errors.Join(e, outcomeErr)
+					run.Attempts, outcomeErr = unitTestAttempts(data)
 					e = errors.Join(e, outcomeErr)
 					for key := range run.Outcomes {
 						pkg, name, ok := strings.Cut(key, "::")
@@ -296,7 +347,7 @@ func validateUnitSelections(r *Report, requested []UnitTestSelection) ([]UnitTes
 					continue
 				}
 				for _, decl := range source.Declarations {
-					if decl.Name == name && decl.Kind == "test" {
+					if decl.Name == name && (decl.Kind == "test" || decl.Kind == "example" || decl.Kind == "fuzz") {
 						found = true
 					}
 				}
@@ -321,15 +372,57 @@ func validateUnitSelectionSyntax(selection UnitTestSelection) error {
 		return fmt.Errorf("explicit top-level unit-test names required for %s", selection.Package)
 	}
 	for _, name := range selection.Tests {
-		if name == "TestMain" || !strings.HasPrefix(name, "Test") || !testEntry(name) || !token.IsIdentifier(name) {
+		if name == "TestMain" || !(strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Example") || strings.HasPrefix(name, "Fuzz")) || !testEntry(name) || !token.IsIdentifier(name) {
 			return fmt.Errorf("exact top-level unit-test name required: %q", name)
 		}
 	}
 	return nil
 }
 
+func unitTestAttempts(data []byte) ([]UnitTestAttempt, error) {
+	attempts := []UnitTestAttempt{}
+	active := map[string]int{}
+	counts := map[string]int{}
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 4096), 8<<20)
+	for sc.Scan() {
+		var event struct{ Action, Package, Test string }
+		if err := json.Unmarshal(sc.Bytes(), &event); err != nil {
+			return attempts, fmt.Errorf("decode selected test attempts: %w", err)
+		}
+		if event.Test == "" {
+			continue
+		}
+		key := event.Package + "::" + event.Test
+		switch event.Action {
+		case "run":
+			counts[key]++
+			active[key] = len(attempts)
+			attempts = append(attempts, UnitTestAttempt{Test: key, Attempt: counts[key], Outcome: "incomplete"})
+		case "pass", "fail", "skip":
+			if index, ok := active[key]; ok {
+				attempts[index].Outcome = event.Action
+				delete(active, key)
+			}
+		}
+	}
+	return attempts, sc.Err()
+}
+
 func unitTestOutcomes(data []byte) (map[string]string, error) {
 	out := map[string]string{}
+	attempts, err := unitTestAttempts(data)
+	if err != nil {
+		return out, err
+	}
+	for _, attempt := range attempts {
+		prior, exists := out[attempt.Test]
+		if !exists || attempt.Outcome == "fail" || prior != "fail" && attempt.Outcome == "incomplete" || prior == "pass" && attempt.Outcome == "skip" {
+			out[attempt.Test] = attempt.Outcome
+		}
+	}
+	// Package-level status remains available without being confused with a
+	// selected top-level test. Test outcomes preserve any failed attempt.
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 4096), 8<<20)
 	for sc.Scan() {
@@ -337,7 +430,10 @@ func unitTestOutcomes(data []byte) (map[string]string, error) {
 		if err := json.Unmarshal(sc.Bytes(), &event); err != nil {
 			return out, fmt.Errorf("decode selected test output: %w", err)
 		}
-		key := event.Package + "::" + event.Test
+		if event.Test != "" {
+			continue
+		}
+		key := event.Package + "::"
 		switch event.Action {
 		case "run":
 			out[key] = "incomplete"

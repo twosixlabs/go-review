@@ -159,7 +159,8 @@ type reviewMCP struct {
 	mu   sync.Mutex
 	// Published reports are immutable. Replacing evidence produces a new pointer
 	// and digest; old contextual IDs are never silently applied to a new report.
-	cache map[*review.Report]*querySnapshot
+	cache  map[*review.Report]*querySnapshot
+	pinned map[string]*querySnapshot
 }
 
 func (s *Server) mcpHandler() http.Handler {
@@ -175,6 +176,7 @@ func (service *reviewMCP) server() *mcp.Server {
 	})
 	registerChangesTool(server, service.work)
 	registerTestQualityTool(server, service.work)
+	registerRetrievalTool(server, service.work)
 	registerReviewTool(server, service, "review_overview", "Snapshot identity, projectKind, purposeDocument, module metrics and shared entry inventory. Wasm entries come from WIT exports and configuration, CLI entries from main, standalone library entries from public API; init is separate. Sections entryEvidence, entrySources, entryLimitations and initialization disclose provenance and uncertainty.", "overview", func(a overviewInput) (string, string) { return "", a.Module })
 	registerReviewTool(server, service, "review_flow", "Overall control/information flow, local expansion or focused flow with connected parent context. Exact UI projection and metrics.", "flow", func(a flowInput) (string, string) { return a.SnapshotID, "" })
 	registerReviewTool(server, service, "review_inspect", "Node/edge summary and paged operations/alternatives. Select sections documentation, comments, members, children, maximumOwners, information or guards for explicit detail.", "inspect", func(a inspectInput) (string, string) { return a.SnapshotID, "" })
@@ -263,6 +265,22 @@ func registerReviewTool[Input any](server *mcp.Server, service *reviewMCP, name,
 func boolPointer(value bool) *bool { return &value }
 
 func (service *reviewMCP) snapshot(id, module string) (*querySnapshot, []snapshotInfo, error) {
+	if service.pinned != nil {
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		snapshot := service.pinned[id]
+		if snapshot == nil {
+			return nil, nil, fmt.Errorf("unknown assessment-pinned snapshot %q", id)
+		}
+		if snapshot.query == nil {
+			query, err := webui.NewReviewQuery(snapshot.report)
+			if err != nil {
+				return nil, nil, err
+			}
+			snapshot.query = query
+		}
+		return snapshot, []snapshotInfo{snapshot.info}, nil
+	}
 	service.work.mu.RLock()
 	selected := service.work.report
 	run := service.work.review

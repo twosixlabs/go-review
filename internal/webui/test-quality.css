@@ -1,13 +1,18 @@
-#test-quality-workspace { margin: 8px 18px 24px; min-height: 65vh; }
+#test-quality-workspace { flex: none; margin: 8px 18px 24px; min-height: 65vh; }
 #test-quality-workspace[hidden] { display: none; }
 body.test-quality-open { height: auto; overflow: auto; min-height: 100dvh; }
-body.test-quality-open main,body.test-quality-open .function-views,body.test-quality-open #advanced-tools { display: none; }
+body.test-quality-open > main,body.visual-workspace.test-quality-open > main,
+body.test-quality-open .function-views,body.test-quality-open #advanced-tools { display: none; }
 body.test-quality-open.chat-open #test-quality-workspace { margin-right: clamp(380px,32vw,620px); }
 .quality-heading,.quality-actions { display: flex; align-items: center; gap: 12px; }
 .quality-heading h2 { margin-right: auto; }
 .quality-heading small { font-size: .75rem; font-weight: normal; }
 .quality-actions label { display: flex; gap: 8px; align-items: center; }
 #quality-overview { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; }
+#quality-job-progress { max-width: 700px; margin: 8px 0 16px; }
+#quality-job-progress[hidden] { display: none; }
+#quality-progress-label { display: block; margin-bottom: 6px; }
+#quality-progress-bar { width: 100%; height: 12px; accent-color: #92c8ff; }
 .quality-score { border: 1px solid #7691a8; border-radius: 6px; padding: 12px; min-width: 150px; }
 .quality-score strong { font-size: 1.65rem; display: block; }
 .quality-grid { display: grid; grid-template-columns: minmax(210px,22%) minmax(230px,26%) minmax(0,1fr); gap: 14px; margin-top: 16px; }

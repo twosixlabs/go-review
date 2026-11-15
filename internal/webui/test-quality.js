@@ -19,8 +19,30 @@ function qualityCounts(summary) {
   const c=summary?.counts||{};
   return `${c.scored||0} scored · ${c.insufficient||0} insufficient · ${c.unreviewed||0} unreviewed · ${c.excluded||0} excluded`;
 }
+function qualityRenderProgress(status,summary,phase) {
+  const parent=qualityEl('quality-job-progress'),bar=qualityEl('quality-progress-bar'),label=qualityEl('quality-progress-label');
+  parent.hidden=!status;
+  const active=['running','queued'].includes(status);
+  parent.setAttribute('aria-busy',String(active));
+  const c=summary?.counts,processed=c?c.scored+c.insufficient:0,total=c?processed+c.unreviewed:0;
+  const noun='tests';
+  if(active&&phase&&phase!=='individual-judgments') {
+    bar.hidden=false;bar.removeAttribute('value');bar.removeAttribute('max');
+    label.textContent=`${status} · ${phase.replaceAll('-',' ')} · ${processed} of ${total} ${noun} individually processed`;
+    return;
+  }
+  if(status==='queued'||!total) {
+    bar.removeAttribute('value');bar.removeAttribute('max');
+    bar.hidden=!active;
+    label.textContent=status==='queued'?'Queued · waiting to start':
+      active?'Preparing assessment · test total not yet available':'No assessable '+noun+'.';
+  } else {
+    bar.hidden=false;bar.max=total;bar.value=processed;
+    label.textContent=`${status} · ${processed} of ${total} ${noun} processed`;
+  }
+}
 function qualityContext() {
-  return {assessmentID:qualityState.id,operation:qualityState.source?'source':qualityState.selected?'responsibility':'overview',
+  return {assessmentID:qualityState.id,operation:qualityState.source?'source':qualityState.selected?'test':'overview',
     ...(qualityState.source||qualityState.selected||{})};
 }
 function qualityClose() {
@@ -39,9 +61,9 @@ async function qualityOpen() {
   await qualityAct(async()=>{
     const config=await qualityRequest('/api/chat/status');
     qualityEl('quality-provider').textContent=config.enabled?
-      `${config.external?'External':'Local'} provider: ${config.model} · ${config.baseURL}`:'AI disabled. Configure the review assistant provider to start an assessment. Saved results remain readable.';
+      `${config.external?'External':'Local'} provider: ${config.model} · ${config.baseURL}`:'AI disabled. Starting retains deterministic facts and authorized diagnostic observations; semantic judgments remain unknown.';
     qualityState.external=!!config.external;
-    qualityEl('quality-external').hidden=!config.external;qualityEl('quality-start').disabled=!config.enabled;
+    qualityEl('quality-external').hidden=!config.external;qualityEl('quality-start').disabled=false;
     await qualityPoll();
     if(qualityState.id){await qualityOverview();await qualityPackages();}
     else qualityNotice('No saved assessment for this project. Start explicitly to review retained evidence.');
@@ -59,7 +81,7 @@ async function qualityPoll() {
     const option=el('option',`${a.createdAt||a.id} · ${a.status} · ${a.model||''}`,select);
     option.value=a.id;
   }
-  if(!qualityState.id&&list.length)qualityState.id=list[0].id;
+  if(!qualityState.id&&list.length)qualityState.id=(list.find(a=>a.unit==='test')||list[0]).id;
   if(qualityState.id&&!list.some(a=>a.id===qualityState.id)) {
     const option=el('option','Pinned assessment · '+qualityState.id,select);option.value=qualityState.id;
   }
@@ -67,6 +89,7 @@ async function qualityPoll() {
   const active=list.filter(a=>['running','queued'].includes(a.status));
   qualityEl('test-quality').textContent=active.length?'Test Quality · '+active.length+' active':'Test Quality';
   const current=list.find(a=>a.id===qualityState.id);
+  qualityRenderProgress(current?.status,current?.summary,current?.phase);
   qualityEl('quality-cancel').hidden=!current||!['running','queued'].includes(current.status);
   if(current)qualityEl('quality-progress').textContent=current.status+' · '+qualityCounts(current.summary);
   if(qualityState.active&&qualityState.id)await qualityOverview();
@@ -76,13 +99,53 @@ async function qualityOverview() {
   const id=qualityState.id,data=await qualityQuery('overview');
   if(id!==qualityState.id)return;
   qualityState.overview=data;
+  qualityRenderProgress(data.status,data.summary,data.phase);
   const parent=qualityEl('quality-overview');parent.replaceChildren();
-  const score=el('div',undefined,parent,'quality-score');el('span','Overall AI-assessed score',score);el('strong',qualityScore(data.summary?.score),score);
+  const score=el('div',undefined,parent,'quality-score');el('span','Individual test rating average (not suite adequacy)',score);el('strong',qualityScore(data.summary?.score),score);
   el('span',data.summary?.partial?'Partial scope':'Assessed scope',score);
-  if(data.summary?.score===null)el('p','Unavailable: no functions have supported ratings.',score);
+  if(data.summary?.score===null)el('p','Unavailable: no tests have supported ratings.',score);
   for(const [name,value] of Object.entries(data.categories||{})) {
     const card=el('div',undefined,parent,'quality-score');el('span',name.replaceAll('-',' '),card);el('strong',qualityScore(value),card);
   }
+  el('p',`${data.analysis?.parsedSources||0} retained sources parsed once · ${data.analysis?.helpersAnalyzed||0} shared helpers analyzed · ${data.review?.requests||0} model requests · ${data.review?.inputBytes||0} input bytes`,parent);
+  el('p',data.diagnosticReason||'Diagnostic planning has not completed.',parent);
+  button('Inspect collective behaviors and conditions',()=>qualityAct(async()=>{
+    const target=el('section',undefined,parent),suite=await qualityQuery('suite');
+    if(id!==qualityState.id)return;
+    el('h3','Collective suite judgment · '+suite.status,target);if(suite.reason)el('p',suite.reason,target);
+    await qualityPage('expectations',{},target,e=>{
+      button(e.description+' · '+e.state,()=>qualityAct(async()=>{
+        const detail=await qualityQuery('expectation',{expectationID:e.id});
+        if(id!==qualityState.id)return;
+        const section=el('section',undefined,target);el('h4',detail.description+' · '+detail.state,section);
+        el('p',detail.basis+' · '+detail.rationale,section);qualityCitations(section,detail.evidence);
+        if(detail.scope?.length)el('p',`Group observation from ${detail.scope.length} selected test${detail.scope.length===1?'':'s'}; other groups may contribute.`,section);
+        for(const identity of detail.tests||[])button('Inspect contributing test',()=>qualityAct(()=>qualityResponsibility(identity)),section);
+        await qualityPage('conditions',{expectationID:e.id},section,c=>{
+          el('p',c.description+' · '+c.state+' · '+c.rationale,section);qualityCitations(section,c.evidence);
+          for(const identity of c.tests||[])button('Inspect condition test',()=>qualityAct(()=>qualityResponsibility(identity)),section);
+        });
+      }),target);
+    });
+    await qualityPage('suite-findings',{},target,f=>{
+      const section=el('section',undefined,target);el('h4',f.title,section);
+      el('p',f.rationale,section);if(f.consequence)el('p',f.consequence,section);if(f.suggestion)el('p',f.suggestion,section);qualityCitations(section,f.evidence);
+    });
+  }),parent);
+  button('Inspect fresh diagnostic observations',()=>qualityAct(async()=>{
+    const target=el('section',undefined,parent);
+    await qualityPage('diagnostics',{},target,record=>{
+      const section=el('section',undefined,target);el('pre',JSON.stringify(record,null,2),section);
+      const args={diagnosticIndex:record.diagnosticIndex};
+      button('Inspect diagnostic runs',()=>qualityAct(async()=>{
+        await qualityPage('diagnostic-runs',args,section,run=>{
+          el('pre',JSON.stringify(run,null,2),section);
+          button('Inspect attempts',()=>qualityAct(()=>qualityPage('diagnostic-attempts',{...args,runIndex:run.runIndex},section,attempt=>el('pre',JSON.stringify(attempt,null,2),section))),section);
+        });
+      }),section);
+      button('Inspect diagnostic artifacts',()=>qualityAct(()=>qualityPage('diagnostic-artifacts',args,section,artifact=>el('pre',JSON.stringify(artifact,null,2),section))),section);
+    });
+  }),parent);
   qualityEl('quality-progress').textContent=`${data.status} · ${qualityCounts(data.summary)} · ${data.moduleCount||0} modules · ${data.unavailableModuleCount||0} unavailable`;
   const limits=qualityEl('quality-limitations');limits.replaceChildren();
   el('p',`${data.version} · ${data.model} · ${data.root||''} · assessment ${data.assessmentID}`,limits);
@@ -106,7 +169,8 @@ async function qualityPage(operation,args,parent,draw,offset=0) {
 async function qualityPackages() {
   qualityState.serial++;
   const parent=qualityEl('quality-packages');parent.replaceChildren();
-  button('All project responsibilities',()=>qualityAct(()=>{qualityState.group=null;return qualityFunctions();}),parent);
+  button('All project tests',
+    ()=>qualityAct(()=>{qualityState.group=null;return qualityFunctions();}),parent);
   await qualityPage('modules',{},parent,g=>{
     const b=button(`${g.module} · ${g.package} · ${qualityScore(g.summary.score)} · ${g.findings} findings`,()=>qualityAct(async()=>{
       qualityState.group={snapshotID:g.snapshotID,module:g.module,package:g.package};await qualityFunctions();
@@ -117,7 +181,7 @@ async function qualityFunctions() {
   qualityState.serial++;
   const parent=qualityEl('quality-functions');parent.replaceChildren();
   qualityState.selected=null;qualityState.source=null;qualityEl('quality-detail').replaceChildren();qualityEl('quality-source').replaceChildren();
-  await qualityPage('responsibilities',{...qualityState.group,query:qualityEl('quality-search').value,status:qualityEl('quality-filter').value},parent,item=>{
+  await qualityPage('tests',{...qualityState.group,query:qualityEl('quality-search').value,status:qualityEl('quality-filter').value},parent,item=>{
     button(`${item.name} · ${item.status} · ${qualityScore(item.summary.score)} · ${item.findingCount} findings`,
       ()=>qualityAct(()=>qualityResponsibility(item.identity)),parent);
   });
@@ -128,18 +192,19 @@ function qualityCitations(parent,citations) {
 async function qualityResponsibility(identity) {
   const input={snapshotID:identity.snapshotID,symbolID:identity.symbolID};
   const id=qualityState.id,serial=++qualityState.serial;
-  const data=await qualityQuery('responsibility',input);
+  const data=await qualityQuery('test',input);
   if(id!==qualityState.id||serial!==qualityState.serial)return;
   qualityState.selected=input;qualityState.source=null;qualityEl('quality-source').replaceChildren();
   const parent=qualityEl('quality-detail');parent.replaceChildren();
   el('h3',data.name,parent);el('p',data.status+(data.reason?' · '+data.reason:''),parent);
+  if(data.declaration?.fileID)qualityCitations(parent,[data.declaration]);
   for(const r of data.ratings||[]) {
     el('h4',`${r.dimension.replaceAll('-',' ')} · ${r.state==='assessed'?r.value+' / 4':r.state}`,parent);
     el('p',r.rationale,parent);qualityCitations(parent,r.evidence);
   }
   for(const f of data.findings||[]) {
     const section=el('section',undefined,parent);el('h4',f.title,section);el('small',f.category+' · AI '+f.kind,section);
-    el('p',f.rationale,section);el('p','Consequence: '+f.consequence,section);el('p','Suggested test/improvement: '+f.suggestion,section);qualityCitations(section,f.evidence);
+    el('p',f.rationale,section);if(f.consequence)el('p','Consequence: '+f.consequence,section);if(f.suggestion)el('p','Suggested test/improvement: '+f.suggestion,section);qualityCitations(section,f.evidence);
   }
   const details=el('details',undefined,parent);el('summary','Inspect retained tests, coverage & behavior evidence',details);
   button('Browse retained source & test files',()=>qualityAct(async()=>{
@@ -150,6 +215,37 @@ async function qualityResponsibility(identity) {
       if(catalog.nextOffset!==null)button('More files',()=>qualityAct(()=>load(catalog.nextOffset)),target);
     };await load();
   }),details);
+  if(data.testKind) {
+    button('Deterministic checking sites, cases and reliability observations',()=>qualityAct(async()=>{
+      const target=el('section',undefined,details);
+      await qualityPage('facts',input,target,fact=>{
+        el('pre',JSON.stringify(fact,null,2),target);
+        for(const check of fact.checks||[])qualityCitations(target,[check.evidence]);
+        for(const c of fact.cases||[])qualityCitations(target,[c.evidence]);
+      });
+    }),details);
+    button('Test outcomes & run scope',()=>qualityAct(()=>qualityEvidence(input.snapshotID,'test-runs',
+      {testName:data.name,package:data.package,limit:20},details)),details);
+    button('Browse supporting production declarations',()=>qualityAct(async()=>{
+      const target=el('section',undefined,details);
+      const load=async(offset=0)=>{
+        const symbols=await qualityQuery('evidence',{snapshotID:input.snapshotID,evidenceOperation:'symbols',args:{offset,limit:20}});
+        for(const s of symbols.items||[])button(s.package+' · '+s.name,()=>{
+          const context=el('section',undefined,target);el('h4','Supporting production: '+s.name,context);
+          if(s.location?.fileID)button('Read production source',()=>qualityAct(()=>qualitySource({
+            snapshotID:input.snapshotID,fileID:s.location.fileID,startLine:s.location.line,endLine:Math.min(s.location.endLine,s.location.line+99)})),context);
+          for(const [label,operation,args] of [
+            ['Statement coverage (not test quality)','coverage',{symbolID:s.id,limit:100}],
+            ['Control-flow alternatives','evidence',{symbolID:s.id,section:'controlFlowNodes'}],
+            ['Data flow & opaque boundaries','dataflow',{symbolID:s.id}]
+          ])button(label,()=>qualityAct(()=>qualityEvidence(input.snapshotID,operation,args,context)),context);
+        },target);
+        if(symbols.nextOffset!==null&&symbols.nextOffset!==undefined)button('More production declarations',()=>qualityAct(()=>load(symbols.nextOffset)),target);
+      };
+      await load();
+    }),details);
+    return;
+  }
   for(const [label,operation,args] of [
     ['Coverage & test runs','evidence',{symbolID:input.symbolID}],
     ['Executed & uncovered statement blocks','coverage',{symbolID:input.symbolID,limit:100}],
@@ -165,7 +261,7 @@ async function qualityEvidence(snapshotID,operation,args,parent) {
   el('pre',JSON.stringify(data,null,2),target);
   for(const section of data.sections||[])button('Read '+section,()=>qualityAct(()=>
     qualityEvidence(snapshotID,operation,{...args,section,offset:0},target)),target);
-  const pages=[data,data.blocks,data.unitEvidence?.runs,data.observations].filter(p=>Array.isArray(p?.items));
+  const pages=[data,data.results,data.blocks,data.unitEvidence?.runs,data.observations].filter(p=>Array.isArray(p?.items));
   for(const page of pages) {
     if(page.nextOffset!==null&&page.nextOffset!==undefined)
       button('More evidence',()=>qualityAct(()=>qualityEvidence(snapshotID,operation,{...args,offset:page.nextOffset},target)),target);
@@ -199,7 +295,7 @@ async function qualityNavigate(input,expectedFingerprint,signal) {
   if(expectedFingerprint!==undefined)expectedFingerprint=chatFingerprint();
   await qualityOpen();
   check();
-  if(input.operation==='responsibility')await qualityResponsibility(input);
+  if(input.operation==='test')await qualityResponsibility(input);
   else if(input.operation==='source')await qualitySource(input);
   else {qualityState.selected=null;qualityState.source=null;qualityEl('quality-detail').replaceChildren();qualityEl('quality-source').replaceChildren();}
 }
@@ -207,7 +303,7 @@ qualityEl('test-quality').onclick=qualityOpen;
 qualityEl('quality-return').onclick=qualityClose;
 qualityEl('quality-start').onclick=()=>qualityAct(async()=>{
   if(qualityState.external&&!qualityEl('quality-consent').checked)throw Error('Approve the external-provider disclosure before starting.');
-  const a=await qualityRequest('/api/test-quality/start',{confirmExternal:qualityState.external&&qualityEl('quality-consent').checked});
+  const a=await qualityRequest('/api/test-quality/start',{confirmExternal:qualityState.external&&qualityEl('quality-consent').checked,allowExecution:qualityEl('quality-execute').checked});
   qualityState.id=a.id;qualityState.selected=null;qualityState.source=null;qualityState.group=null;qualityState.serial++;
   qualityEl('quality-consent').checked=false;qualityEl('quality-detail').replaceChildren();qualityEl('quality-source').replaceChildren();
   qualityNotice('Assessment started in the background. Continue browsing or chatting; only Cancel stops it.');

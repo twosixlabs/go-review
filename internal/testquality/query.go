@@ -19,6 +19,10 @@ type QueryInput struct {
 	Status            string          `json:"status,omitempty"`
 	Query             string          `json:"query,omitempty"`
 	FindingIndex      int             `json:"findingIndex,omitempty"`
+	ExpectationID     string          `json:"expectationID,omitempty"`
+	ConditionID       string          `json:"conditionID,omitempty"`
+	DiagnosticIndex   int             `json:"diagnosticIndex,omitempty"`
+	RunIndex          int             `json:"runIndex,omitempty"`
 	FileID            string          `json:"fileID,omitempty"`
 	StartLine         int             `json:"startLine,omitempty"`
 	EndLine           int             `json:"endLine,omitempty"`
@@ -36,16 +40,37 @@ func page[T any](items []T, input QueryInput) (json.RawMessage, error) {
 	if limit == 0 {
 		limit = 20
 	}
-	end := min(len(items), input.Offset+limit)
+	end := input.Offset
+	encoded := []json.RawMessage{}
+	// Reserve envelope/cursor bytes; a page may contain fewer rows than its
+	// requested count, but its next offset always advances by returned rows.
+	bytesLeft := (32 << 10) - 128
+	for end < min(len(items), input.Offset+limit) {
+		raw, err := json.Marshal(items[end])
+		if err != nil {
+			return nil, err
+		}
+		if len(raw)+1 > bytesLeft {
+			if len(encoded) == 0 {
+				return nil, fmt.Errorf("single test quality row exceeds 32 KiB; use its detail operation")
+			}
+			break
+		}
+		encoded = append(encoded, raw)
+		bytesLeft -= len(raw) + 1
+		end++
+	}
 	var next *int
 	if end < len(items) {
 		next = &end
 	}
-	return json.Marshal(map[string]any{"items": items[input.Offset:end], "total": len(items), "nextOffset": next})
+	return json.Marshal(map[string]any{"items": encoded, "total": len(items), "nextOffset": next})
 }
 
 // Query is the common read-only projection used by HTTP, MCP and chat. It
 // cannot launch assessment or execution, and IDs resolve only in this archive.
+// Collective/diagnostic listings omit nested collections, which have their
+// own owner-qualified paged readers to keep large retained records reachable.
 func Query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessage, error) {
 	data, err := query(ctx, a, input)
 	if err != nil {
@@ -64,7 +89,10 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 	if input.AssessmentID != a.ID {
 		return nil, fmt.Errorf("assessment identity mismatch")
 	}
-	if input.Offset < 0 || input.Limit < 0 || input.Limit > 100 {
+	if a.Version != EvidenceRubricVersion {
+		return nil, fmt.Errorf("unsupported Test Quality version %q; start a new assessment", a.Version)
+	}
+	if input.Offset < 0 || input.Limit < 0 || input.Limit > 100 || input.DiagnosticIndex < 0 || input.RunIndex < 0 {
 		return nil, fmt.Errorf("invalid pagination")
 	}
 	items := []Responsibility{}
@@ -90,17 +118,103 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		items = append(items, item)
 	}
 	switch input.Operation {
+	case "suite":
+		if a.Suite == nil {
+			return json.Marshal(SuiteAssessment{Status: StatusUnreviewed, Reason: "Collective judgment has not been performed."})
+		}
+		return json.Marshal(map[string]any{"status": a.Suite.Status, "ratings": a.Suite.Ratings, "reason": a.Suite.Reason, "scopeCount": len(a.Suite.Scope), "expectationCount": len(a.Suite.Expectations)})
+	case "diagnostics":
+		records := []map[string]any{}
+		for i, record := range a.Diagnostics {
+			records = append(records, map[string]any{"diagnosticIndex": i, "request": record.Request, "status": record.Status, "error": record.Error, "sourceVerified": record.SourceVerified, "runCount": len(record.Runs), "artifactCount": len(record.Artifacts)})
+		}
+		return page(records, input)
+	case "diagnostic-runs", "diagnostic-attempts", "diagnostic-artifacts":
+		if input.DiagnosticIndex >= len(a.Diagnostics) {
+			return nil, fmt.Errorf("diagnostic index is outside this assessment")
+		}
+		record := a.Diagnostics[input.DiagnosticIndex]
+		if input.Operation == "diagnostic-artifacts" {
+			return page(record.Artifacts, input)
+		}
+		if input.Operation == "diagnostic-attempts" {
+			if input.RunIndex >= len(record.Runs) {
+				return nil, fmt.Errorf("run index is outside this diagnostic")
+			}
+			return page(record.Runs[input.RunIndex].Attempts, input)
+		}
+		runs := []map[string]any{}
+		for i, run := range record.Runs {
+			commands := []map[string]any{}
+			for _, command := range run.Commands {
+				commands = append(commands, map[string]any{"executable": command.Executable, "args": command.Args, "exitCode": command.ExitCode})
+			}
+			runs = append(runs, map[string]any{"runIndex": i, "selection": run.Selection, "status": run.Status, "error": run.Error, "attemptCount": len(run.Attempts), "shuffleSeed": run.ShuffleSeed, "commands": commands})
+		}
+		return page(runs, input)
+	case "expectations":
+		rows := []map[string]any{}
+		if a.Suite != nil {
+			for _, e := range a.Suite.Expectations {
+				rows = append(rows, map[string]any{"id": e.ID, "description": e.Description, "basis": e.Basis, "state": e.State, "conditionCount": len(e.Conditions), "testCount": len(e.Tests)})
+			}
+		}
+		return page(rows, input)
+	case "expectation", "conditions", "condition":
+		if a.Suite != nil {
+			for _, e := range a.Suite.Expectations {
+				if e.ID != input.ExpectationID {
+					continue
+				}
+				switch input.Operation {
+				case "expectation":
+					count := len(e.Conditions)
+					e.Conditions = nil
+					return json.Marshal(struct {
+						ExpectedBehavior
+						ConditionCount int `json:"conditionCount"`
+					}{e, count})
+				case "conditions":
+					return page(e.Conditions, input)
+				case "condition":
+					for _, c := range e.Conditions {
+						if c.ID == input.ConditionID {
+							return json.Marshal(c)
+						}
+					}
+					return nil, fmt.Errorf("condition ID is outside this expectation")
+				}
+			}
+		}
+		return nil, fmt.Errorf("expectation ID is outside this assessment")
+	case "suite-findings":
+		if a.Suite == nil {
+			return page([]Finding{}, input)
+		}
+		return page(a.Suite.Findings, input)
+	case "facts":
+		facts := a.Facts
+		selected := []TestFacts{}
+		for _, fact := range facts {
+			if input.SnapshotID != "" && fact.Identity.SnapshotID != input.SnapshotID || input.SymbolID != "" && fact.Identity.SymbolID != input.SymbolID {
+				continue
+			}
+			selected = append(selected, fact)
+		}
+		return page(selected, input)
 	case "overview":
-		summary, err := Aggregate(a.Items)
+		operations := []string{"modules", "unavailable", "findings", "tests", "test", "finding", "source", "evidence"}
+		operations = append(operations, "facts", "suite", "expectations", "expectation", "conditions", "condition", "suite-findings", "diagnostics", "diagnostic-runs", "diagnostic-attempts", "diagnostic-artifacts")
+		summary, err := AggregateVersion(a.Version, a.Items)
 		if err != nil {
 			return nil, err
 		}
 		summary.Partial = summary.Partial || len(a.Unavailable) > 0 || a.Status != "completed"
 		categories := map[Dimension]*float64{}
-		for _, d := range []Dimension{AssertionStrength, RepresentativeCases, BehaviorPaths} {
+		for _, d := range []Dimension{Craftsmanship, AssertionStrength} {
 			sum, n := 0, 0
 			for _, item := range a.Items {
-				if item.Status != StatusScored {
+				if item.Status != StatusScored && item.Status != StatusInsufficient {
 					continue
 				}
 				for _, r := range item.Ratings {
@@ -117,11 +231,21 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 			}
 			categories[d] = value
 		}
+		categories[BehaviorAdequacy], categories[ConditionAdequacy] = nil, nil
+		if a.Suite != nil {
+			for _, rating := range a.Suite.Ratings {
+				if rating.State == RatingAssessed && rating.Value != nil {
+					score := 25 * float64(*rating.Value)
+					categories[rating.Dimension] = &score
+				}
+			}
+		}
 		return json.Marshal(map[string]any{"assessmentID": a.ID, "version": a.Version, "root": a.Root, "reviewID": a.ReviewID,
 			"status": a.Status, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "provider": a.Provider, "model": a.Model,
-			"summary": summary, "categories": categories, "moduleCount": len(a.Reports), "unavailableModuleCount": len(a.Unavailable),
-			"limitations": []string{"AI judgments, not measured facts. Coverage is statement coverage scoped to its retained run.", "Unknown and unreviewed functions do not contribute zeros. Scores weight scored functions equally; applicable dimensions equally within each function.", "Closures contribute to their enclosing declaration. Failed/unavailable modules are outside the scored population."},
-			"operations":  []string{"modules", "unavailable", "findings", "responsibilities", "responsibility", "finding", "source", "evidence"}})
+			"summary": summary, "unit": "test", "categories": categories, "moduleCount": len(a.Reports), "unavailableModuleCount": len(a.Unavailable),
+			"phase": a.Phase, "phaseMillis": a.PhaseMillis, "policy": a.Policy, "diagnosticReason": a.DiagnosticReason, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence,
+			"limitations": []string{"AI judgments, not measured facts. Production coverage is supporting context, not test quality.", "Scores equally weight assessed entries. Insufficient and unreviewed entries are unknown, not zero.", "Table cases and subtests belong to their enclosing test.", "Aggregate coverage does not identify which individual test or case executed a production path."},
+			"operations":  operations})
 	case "findings":
 		type row struct {
 			Identity     Identity `json:"identity"`
@@ -162,7 +286,7 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		out := []group{}
 		for _, k := range keys {
 			v := groups[k]
-			summary, err := Aggregate(v)
+			summary, err := AggregateVersion(a.Version, v)
 			if err != nil {
 				return nil, err
 			}
@@ -175,7 +299,7 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		return page(out, input)
 	case "unavailable":
 		return page(a.Unavailable, input)
-	case "responsibilities":
+	case "tests":
 		type row struct {
 			Identity     Identity `json:"identity"`
 			Name         string   `json:"name"`
@@ -183,17 +307,19 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 			Status       Status   `json:"status"`
 			Summary      Summary  `json:"summary"`
 			FindingCount int      `json:"findingCount"`
+			Declaration  Citation `json:"declaration"`
+			TestKind     string   `json:"testKind,omitempty"`
 		}
 		out := []row{}
 		for _, item := range items {
-			s, err := Aggregate([]Responsibility{item})
+			s, err := AggregateVersion(a.Version, []Responsibility{item})
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, row{item.Identity, item.Name, item.Package, item.Status, s, len(item.Findings)})
+			out = append(out, row{item.Identity, item.Name, item.Package, item.Status, s, len(item.Findings), item.Declaration, item.TestKind})
 		}
 		return page(out, input)
-	case "responsibility", "finding":
+	case "test", "finding":
 		if input.SnapshotID == "" || input.SymbolID == "" || len(items) != 1 {
 			return nil, fmt.Errorf("select one qualified snapshotID and symbolID")
 		}

@@ -3,9 +3,11 @@ package testquality
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/russellbrasser/go-review/internal/review"
@@ -18,9 +20,81 @@ func testReport(root string) *review.Report {
 		return review.File{ID: id, Path: path, Source: text, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(text)))}
 	}
 	return &review.Report{Root: root, Module: "example", SourceSHA256: "source",
-		Files:       []review.File{file("f", "f.go", source)},
-		TestSources: []review.TestSource{{File: file("t", "f_test.go", test)}},
-		Symbols:     []review.Symbol{{ID: "F", Kind: "function", Name: "F", Package: "example", Location: review.Location{FileID: "f", Line: 2, EndLine: 2}}}}
+		Files: []review.File{file("f", "f.go", source)},
+		TestSources: []review.TestSource{{File: file("t", "f_test.go", test), Declarations: []review.TestDeclaration{
+			{ID: "TestF", Name: "TestF", Kind: "test", Location: review.Location{FileID: "t", Line: 3, EndLine: 3}},
+		}}},
+		Symbols: []review.Symbol{{ID: "F", Kind: "function", Name: "F", Package: "example", Location: review.Location{FileID: "f", Line: 2, EndLine: 2}}}}
+}
+
+func TestStoreAssessmentPopulationIsTestsNotProductionFunctions(t *testing.T) {
+	r := testReport(t.TempDir())
+	r.TestSources[0].File.Source += "func TestOther(t *testing.T) { t.Log(F()) }\n"
+	r.TestSources[0].File.SHA256 = Digest([]byte(r.TestSources[0].File.Source))
+	r.TestSources[0].File.Package = "example"
+	r.TestSources[0].Declarations = append(r.TestSources[0].Declarations,
+		review.TestDeclaration{ID: "TestOther", Name: "TestOther", Kind: "test", Location: review.Location{FileID: "t", Line: 3, EndLine: 3}},
+		review.TestDeclaration{ID: "helper", Name: "helper", Kind: "helper"},
+		review.TestDeclaration{ID: "main", Name: "TestMain", Kind: "test"},
+		review.TestDeclaration{ID: "bench", Name: "BenchmarkF", Kind: "benchmark"},
+	)
+	r.TestSources[0].ExcludedRanges = []review.Location{{FileID: "t", Line: 3, EndLine: 3}}
+	r.TestSources[0].Declarations[1].Location = review.Location{FileID: "t", Line: 4, EndLine: 4}
+	for i := 0; i < 40; i++ {
+		r.Symbols = append(r.Symbols, review.Symbol{ID: fmt.Sprint(i), Kind: "function", Name: "Production"})
+	}
+
+	a, err := (Store{Directory: t.TempDir()}).Create(context.Background(), &review.RepositoryReview{Root: r.Root, Modules: []review.ReviewedModule{{Report: r}}}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Items) != 2 || a.Items[0].Name != "TestF" || a.Items[1].Name != "TestOther" {
+		t.Fatalf("must assess tests once, never each production function: %+v", a.Items)
+	}
+	if a.Items[0].Status != StatusExcluded || a.Items[1].Status != StatusUnreviewed {
+		t.Fatalf("test scope exclusions not honored: %+v", a.Items)
+	}
+}
+
+func TestStoreRejectsObsoleteAssessmentsWithoutBlockingCurrentArchives(t *testing.T) {
+	for _, version := range []string{"test-quality/1", "test-quality/2"} {
+		t.Run(version, func(t *testing.T) {
+			r := testReport(t.TempDir())
+			s := Store{Directory: t.TempDir()}
+			create := func() *Assessment {
+				a, err := s.Create(t.Context(), &review.RepositoryReview{Root: r.Root, Modules: []review.ReviewedModule{{Report: r}}}, "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return a
+			}
+			current, obsolete := create(), create()
+			obsolete.Version = version
+			raw, err := json.Marshal(obsolete)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.Directory, obsolete.ID, "assessment.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Load(obsolete.ID); err == nil || !strings.Contains(err.Error(), "version") {
+				t.Fatalf("obsolete archive remains readable: %v", err)
+			}
+			if _, err := Query(t.Context(), obsolete, QueryInput{AssessmentID: obsolete.ID, Operation: "overview"}); err == nil {
+				t.Fatal("obsolete in-memory assessment remains queryable")
+			}
+			if err := s.Save(obsolete); err == nil {
+				t.Fatal("obsolete assessment remains writable")
+			}
+			if err := s.Recover(); err != nil {
+				t.Fatalf("obsolete archive blocked current recovery: %v", err)
+			}
+			list, err := s.ListSummaries("")
+			if err != nil || len(list) != 1 || list[0].ID != current.ID {
+				t.Fatalf("current archive listing lost: %+v %v", list, err)
+			}
+		})
+	}
 }
 
 func TestStorePinsEvidenceAndRecoversInterruptedJob(t *testing.T) {

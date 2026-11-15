@@ -13,6 +13,15 @@ button:disabled{cursor:not-allowed}
 button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #9ed5ff;outline-offset:3px}
 .view-options{display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:8px 12px;font-size:12px}
 .view-options .manual-evidence[open]{flex-basis:100%}
+.visual-workspace>.retrieval-panel{flex:none;border-bottom:1px solid #33475c;padding:8px 12px}
+.visual-workspace>.retrieval-panel[open]{max-height:35vh;overflow:auto}
+.retrieval-panel>summary{cursor:pointer}
+.retrieval-panel .view-options{padding-left:0}
+#retrieval-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#retrieval-query{flex:1;min-width:180px}
+.retrieval-results>div{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.retrieval-results button{max-width:100%;overflow-wrap:anywhere;text-align:left}
+.retrieval-panel [hidden]{display:none}
 .visual-workspace>#advanced-tools[open]{max-height:160px;flex:none}
 .visual-workspace>.review-sections,.visual-workspace>.function-views,.visual-workspace>.workspace-bar,.visual-workspace>#status{flex:none}
 /* Explicit areas prevent the third pane from auto-wrapping under the explorer. */
