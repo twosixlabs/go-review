@@ -3,6 +3,7 @@ package testquality
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"sort"
@@ -20,6 +21,14 @@ type ReviewMetrics struct {
 	OutputBytes   int   `json:"outputBytes"`
 	ElapsedMillis int64 `json:"elapsedMillis"`
 }
+
+// ProviderError is a failed inference request, not a judgment about evidence.
+// The job owner must surface it without grading subsequent tests.
+type ProviderError struct{ Err error }
+
+func (e *ProviderError) Error() string { return e.Err.Error() }
+func (e *ProviderError) Unwrap() error { return e.Err }
+
 type testContext struct {
 	Test   Responsibility  `json:"test"`
 	Source json.RawMessage `json:"source"`
@@ -30,7 +39,7 @@ type judgmentContext struct {
 	Groups      []suiteGroupContext `json:"groups,omitempty"`
 	Shared      []json.RawMessage   `json:"shared"`
 	Unavailable []string            `json:"unavailable,omitempty"`
-	Diagnostics []DiagnosticRecord  `json:"diagnostics,omitempty"`
+	Diagnostics []diagnosticSummary `json:"diagnostics,omitempty"`
 	Documents   []documentCandidate `json:"documents,omitempty"`
 	Deferred    []Citation          `json:"deferredSource,omitempty"`
 }
@@ -129,7 +138,19 @@ func batchContext(ctx context.Context, a *Assessment, items []Responsibility) (j
 	for _, fact := range facts {
 		byID[fact.Identity] = fact
 	}
-	initial := judgmentContext{Tests: []testContext{}, Shared: []json.RawMessage{}, Unavailable: a.Unavailable, Diagnostics: a.Diagnostics}
+	initial := judgmentContext{Tests: []testContext{}, Shared: []json.RawMessage{}, Unavailable: a.Unavailable}
+	selected := map[Identity]bool{}
+	for _, item := range items {
+		selected[item.Identity] = true
+	}
+	for i, record := range a.Diagnostics {
+		for _, id := range record.Request.Tests {
+			if selected[id] {
+				initial.Diagnostics = append(initial.Diagnostics, summarizeDiagnostic(i, record))
+				break
+			}
+		}
+	}
 	seen := []Citation{}
 	added := map[Citation]bool{}
 	add := func(c Citation) error {
@@ -292,6 +313,15 @@ func judgmentRead(ctx context.Context, a *Assessment, input EvidenceInput, retri
 	if input.Operation == "facts" {
 		return page(a.Facts, QueryInput{Limit: 100})
 	}
+	switch input.Operation {
+	case "diagnostics", "diagnostic-runs", "diagnostic-attempts", "diagnostic-commands", "diagnostic-artifacts":
+		var query QueryInput
+		if err := json.Unmarshal(input.Args, &query); err != nil {
+			return nil, err
+		}
+		query.AssessmentID, query.Operation = a.ID, input.Operation
+		return Query(ctx, a, query)
+	}
 	if input.Operation == "retrieve" {
 		r, err := pinned(a, input.SnapshotID)
 		if err != nil {
@@ -339,7 +369,7 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 		return nil, err
 	}
 	messages := []intelligence.Message{{Role: "system", Content: prompt}, {Role: "user", Content: string(data)}}
-	tools := []intelligence.Tool{{Type: "function", Function: intelligence.Function{Name: "read_evidence", Description: "Read pinned original source or bounded facts/candidates. Retrieval is not inspected source. Operations: source,catalog,symbols,test-runs,facts,search,evidence,document,packages,retrieve.", Parameters: json.RawMessage(readJudgmentSchema)}}, {Type: "function", Function: intelligence.Function{Name: submit, Description: "Submit independent, evidence-backed judgments; unknowns remain unknown.", Parameters: schema}}}
+	tools := []intelligence.Tool{{Type: "function", Function: intelligence.Function{Name: "read_evidence", Description: "Read pinned original source or facts/candidates. Retrieval is not inspected source. Operations: source,catalog,symbols,test-runs,facts,search,evidence,document,packages,retrieve,diagnostics,diagnostic-runs,diagnostic-attempts,diagnostic-commands,diagnostic-artifacts.", Parameters: json.RawMessage(readJudgmentSchema)}}, {Type: "function", Function: intelligence.Function{Name: submit, Description: "Submit independent, evidence-backed judgments; unknowns remain unknown.", Parameters: schema}}}
 	if options.Read != nil {
 		tools = append(append([]intelligence.Tool{}, options.Tools...), tools[1])
 		messages[0].Content = strings.ReplaceAll(prompt, "read_evidence", "the read-only review tools")
@@ -370,7 +400,7 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 		}
 		return nil
 	}
-	provider := intelligence.Provider{Config: cfg, UnboundedOutput: true}
+	provider := intelligence.Provider{Config: cfg, UnboundedOutput: true, WaitForCompletion: true}
 	started := time.Now()
 	defer func() { a.Review.ElapsedMillis += time.Since(started).Milliseconds() }()
 	previousError, repeatedError := "", 0
@@ -435,7 +465,7 @@ func reviewJudgment(ctx context.Context, a *Assessment, cfg intelligence.Config,
 			return nil, traceErr
 		}
 		if err != nil {
-			return nil, err
+			return nil, &ProviderError{Err: err}
 		}
 		raw, err := json.Marshal(answer)
 		if err != nil {
@@ -688,9 +718,13 @@ func AssessBatch(ctx context.Context, a *Assessment, items []Responsibility, cfg
 			}
 			return nil
 		})
+		var providerErr *ProviderError
+		requestFailed := errors.As(callErr, &providerErr)
 		for _, item := range group {
 			if got, ok := valid[item.Identity]; ok {
 				results = append(results, got)
+			} else if requestFailed {
+				results = append(results, item)
 			} else {
 				item.Status = StatusInsufficient
 				if callErr != nil {
@@ -703,6 +737,9 @@ func AssessBatch(ctx context.Context, a *Assessment, items []Responsibility, cfg
 		}
 		if ctx.Err() != nil {
 			return results, ctx.Err()
+		}
+		if requestFailed {
+			return results, callErr
 		}
 	}
 	return results, nil

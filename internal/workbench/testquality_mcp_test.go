@@ -34,6 +34,59 @@ func TestQualityMCPPreparedRetrievalReturnsCandidatesWithoutCitationAuthority(t 
 	}
 }
 
+func TestQualityMCPReadsRetainedFreshDiagnosticAttempts(t *testing.T) {
+	a := &testquality.Assessment{ID: "quality", Version: testquality.EvidenceRubricVersion,
+		Reports: []testquality.PinnedReport{{SnapshotID: "owned", Report: &review.Report{Module: "example"}}},
+		Diagnostics: []testquality.DiagnosticRecord{{
+			Status: "partial", SourceVerified: true,
+			Runs: []review.UnitTestRun{{
+				Attempts: []review.UnitTestAttempt{{Test: "example::TestF", Attempt: 2, Outcome: "fail"}},
+				Commands: []review.Command{{Stdout: "retained fresh command output"}},
+			}},
+		}},
+	}
+	options, closeSession, err := New(&review.Report{Module: "unrelated"}).qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	raw, citations, err := options.Read(t.Context(), "quality_diagnostics", json.RawMessage(`{"snapshotID":"owned","operation":"diagnostic-attempts","diagnosticIndex":0,"runIndex":0}`))
+	if err != nil || !strings.Contains(string(raw), `"outcome":"fail"`) || len(citations) != 0 {
+		t.Fatalf("fresh attempts must remain inspectable without source citation authority: %s %+v %v", raw, citations, err)
+	}
+	raw, citations, err = options.Read(t.Context(), "quality_diagnostics", json.RawMessage(`{"snapshotID":"owned","operation":"diagnostic-commands","diagnosticIndex":0,"runIndex":0}`))
+	if err != nil || !strings.Contains(string(raw), "retained fresh command output") || len(citations) != 0 {
+		t.Fatalf("raw command evidence is not available on demand: %s %+v %v", raw, citations, err)
+	}
+	for _, args := range []string{
+		`{"snapshotID":"unrelated","operation":"diagnostic-attempts","diagnosticIndex":0,"runIndex":0}`,
+		`{"snapshotID":"owned","operation":"source"}`,
+	} {
+		if _, _, err := options.Read(t.Context(), "quality_diagnostics", json.RawMessage(args)); err == nil {
+			t.Fatalf("invalid diagnostic read accepted: %s", args)
+		}
+	}
+}
+
+func TestQualityMCPOverviewSelectsPinnedSnapshot(t *testing.T) {
+	a := &testquality.Assessment{Reports: []testquality.PinnedReport{
+		{SnapshotID: "owned", Report: &review.Report{Module: "example"}},
+		{SnapshotID: "other", Report: &review.Report{Module: "other"}},
+	}}
+	options, closeSession, err := New(&review.Report{Module: "unrelated"}).qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	raw, citations, err := options.Read(t.Context(), "review_overview", json.RawMessage(`{"snapshotID":"owned"}`))
+	if err != nil || len(citations) != 0 || !strings.Contains(string(raw), `"module":"example"`) {
+		t.Fatalf("pinned overview unavailable: %s %+v %v", raw, citations, err)
+	}
+	if _, _, err := options.Read(t.Context(), "review_overview", json.RawMessage(`{"snapshotID":"unrelated"}`)); err == nil {
+		t.Fatal("overview accepted an unowned snapshot")
+	}
+}
+
 func TestQualityMCPPinsReadOnlyToolsToAssessment(t *testing.T) {
 	source := "package example\nfunc F() int {return 1}\n"
 	report := &review.Report{Module: "example", Files: []review.File{{ID: "source", Path: "sample.go", Package: "example", Source: source, SHA256: testquality.Digest([]byte(source))}}}
@@ -45,6 +98,7 @@ func TestQualityMCPPinsReadOnlyToolsToAssessment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer closeSession()
 	found := false
 	for _, tool := range options.Tools {

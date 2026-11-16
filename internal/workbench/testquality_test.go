@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,44 @@ func qualityFixture(t *testing.T) *Server {
 	s.qualityStore = testquality.Store{Directory: t.TempDir()}
 	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: "http://127.0.0.1:12345", Model: "fake"})
 	return s
+}
+
+func TestQualityProviderFailureStopsJobWithoutGradingTests(t *testing.T) {
+	var requests atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+	}))
+	defer provider.Close()
+	s := qualityFixture(t)
+	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture"})
+	start := qualityRequest(t, s, "/api/test-quality/start", `{"allowExecution":false}`)
+	if start.Code != 202 {
+		t.Fatal(start.Body.String())
+	}
+	var response struct{ ID string }
+	if err := json.Unmarshal(start.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	s.qualityMu.Lock()
+	job := s.qualityJobs[response.ID]
+	s.qualityMu.Unlock()
+	defer job.cancel()
+	select {
+	case <-job.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider failure did not stop the job")
+	}
+	saved, err := s.qualityStore.Load(response.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != "failed" || !strings.Contains(saved.Error, "503") || requests.Load() != 1 {
+		t.Fatalf("provider failure was hidden or repeated: status=%s error=%s requests=%d", saved.Status, saved.Error, requests.Load())
+	}
+	if len(saved.Items) != 1 || saved.Items[0].Status != testquality.StatusUnreviewed {
+		t.Fatalf("transport failure was stored as a test judgment: %+v", saved.Items)
+	}
 }
 
 func TestQualitySavedNavigationReusesVerifiedEvidence(t *testing.T) {

@@ -56,7 +56,7 @@ func qualityCompact(a *testquality.Assessment) map[string]any {
 	}
 	summary.Partial = summary.Partial || len(a.Unavailable) > 0 || a.Status != "completed"
 	return map[string]any{"id": a.ID, "status": a.Status, "root": a.Root, "reviewID": a.ReviewID,
-		"summary": summary, "unit": "test", "version": a.Version, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "model": a.Model, "phase": a.Phase, "policy": a.Policy, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence}
+		"summary": summary, "unit": "test", "version": a.Version, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "model": a.Model, "phase": a.Phase, "activity": a.Activity, "policy": a.Policy, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence}
 }
 
 func (s *Server) qualityStart(w http.ResponseWriter, r *http.Request) {

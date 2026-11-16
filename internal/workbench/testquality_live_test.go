@@ -240,14 +240,18 @@ func qualityLiveBrowserData(t *testing.T, server *Server, saved *testquality.Ass
 		"quality-status": map[string]any{"assessments": []any{qualityCompact(saved)}},
 		"chat-status":    map[string]any{"enabled": cfg.Enabled, "external": cfg.External(), "model": cfg.Model, "baseURL": cfg.BaseURL},
 	}
-	for _, operation := range []string{"overview", "indicators", "suite", "expectations", "tests", "facts", "modules", "diagnostics", "suite-findings"} {
+	for _, operation := range []string{"overview", "indicators", "suite", "suite-groups", "expectations", "tests", "facts", "modules", "diagnostics", "suite-findings"} {
 		data, err := server.queryTestQuality(t.Context(), testquality.QueryInput{AssessmentID: saved.ID, Operation: operation})
 		if err != nil {
 			t.Fatalf("saved %s read failed: %v", operation, err)
 		}
 		browser[operation] = data
 	}
-	for _, expectation := range saved.Suite.Expectations {
+	var expectations []testquality.ExpectedBehavior
+	if saved.Suite != nil {
+		expectations = saved.Suite.Expectations
+	}
+	for _, expectation := range expectations {
 		for _, operation := range []string{"expectation", "conditions"} {
 			data, err := server.queryTestQuality(t.Context(), testquality.QueryInput{
 				AssessmentID: saved.ID, Operation: operation, ExpectationID: expectation.ID,

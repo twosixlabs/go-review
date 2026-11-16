@@ -40,6 +40,44 @@ func TestQualityDiagnosticPolicy(t *testing.T) {
 	}
 }
 
+func TestQualityDiagnosticPlanDoesNotReportExecutionExhaustion(t *testing.T) {
+	a := factsAssessment(`package example; import ("testing"; "time")
+func TestF(t *testing.T) { time.Sleep(time.Millisecond) }
+func TestSecond(t *testing.T) { time.Sleep(time.Millisecond) }
+`)
+	r := a.Reports[0].Report
+	a.Items[0].Declaration.EndLine = 2
+	second := a.Items[0]
+	second.Identity.SymbolID, second.Name = "second", "TestSecond"
+	second.Declaration.StartLine, second.Declaration.EndLine = 3, 3
+	a.Items = append(a.Items, second)
+	r.TestSources[0].Declarations[0].Location.EndLine = 2
+	r.TestSources[0].Declarations = append(r.TestSources[0].Declarations, review.TestDeclaration{
+		ID: "second", Name: "TestSecond", Kind: "test",
+		Location: review.Location{FileID: "tests", Line: 3, EndLine: 3},
+	})
+	r.SourceSHA256 = "source"
+	r.UnitEvidence = &review.UnitEvidence{SourceSHA256: "source", Runs: []review.UnitTestRun{{
+		Selection:    review.UnitTestSelection{Package: "example"},
+		MatchedTests: []string{"TestF", "TestSecond"},
+	}}}
+	policy := DefaultDiagnosticPolicy(true)
+	policy.MaxCommands = 1
+	requests, reason, err := PlanDiagnostics(a, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one planned diagnostic, got %d: %s", len(requests), reason)
+	}
+	if strings.Contains(strings.ToLower(reason), "exhausted") || strings.Contains(strings.ToLower(reason), "unresolved") {
+		t.Fatalf("planning must not claim execution or risk outcomes before diagnostics run: %s", reason)
+	}
+	if !strings.Contains(reason, "1 command") || !strings.Contains(reason, "not selected") {
+		t.Fatalf("partial selection must explain its command limit and omitted candidates: %s", reason)
+	}
+}
+
 func TestQualityDiagnosticCollectorRetainsAttemptsAndScope(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "unreviewed-ran")

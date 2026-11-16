@@ -3,14 +3,195 @@ package testquality
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/russellbrasser/go-review/internal/intelligence"
+	"github.com/russellbrasser/go-review/internal/review"
 )
+
+func TestQualityBatchContextScopesDiagnosticSummariesWithoutRepeatingCommandOutput(t *testing.T) {
+	a := qualityLiveAssessment(t, `func TestContract(t *testing.T) {if got,err:=Classify(1);got!="accepted"||err!=nil {t.Fatal(got,err)}}`)
+	unrelated := a.Items[0].Identity
+	unrelated.SymbolID = "another-test"
+	a.Diagnostics = []DiagnosticRecord{
+		{Request: DiagnosticRequest{Tests: []Identity{unrelated}}, Status: "pass"},
+		{Request: DiagnosticRequest{Tests: []Identity{a.Items[0].Identity}, Reason: "Repeat selected test"}, Status: "partial", Error: "second attempt failed", SourceVerified: true,
+			Runs: []review.UnitTestRun{{Commands: []review.Command{{Stdout: strings.Repeat("verbose-test-event\n", 20000)}}}}},
+	}
+	before, _ := json.Marshal(a.Diagnostics)
+	initial, _, err := batchContext(t.Context(), a, a.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range initial.Tests {
+		initial.Tests[i].Facts.Predicates = nil
+	}
+	raw, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projection struct {
+		Diagnostics []struct {
+			Index          int               `json:"diagnosticIndex"`
+			Request        DiagnosticRequest `json:"request"`
+			Status         string            `json:"status"`
+			Error          string            `json:"error"`
+			SourceVerified bool              `json:"sourceVerified"`
+		}
+	}
+	if err := json.Unmarshal(raw, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Diagnostics) != 1 || projection.Diagnostics[0].Index != 1 ||
+		projection.Diagnostics[0].Request.Tests[0] != a.Items[0].Identity ||
+		projection.Diagnostics[0].Status != "partial" || projection.Diagnostics[0].Error != "second attempt failed" || !projection.Diagnostics[0].SourceVerified {
+		t.Fatalf("diagnostic scope, result or drill-down identity lost (%d records, %d bytes)", len(projection.Diagnostics), len(raw))
+	}
+	if len(raw) >= 16<<10 || strings.Contains(string(raw), "verbose-test-event") {
+		t.Fatalf("raw diagnostic output inflated selected-test context to %d bytes", len(raw))
+	}
+	after, _ := json.Marshal(a.Diagnostics)
+	if string(before) != string(after) {
+		t.Fatal("prompt projection changed retained diagnostic evidence")
+	}
+}
+
+type qualityRequestTransport func(*http.Request) (*http.Response, error)
+
+func (f qualityRequestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestQualityBatchRequestsFollowOwnerDeadline(t *testing.T) {
+	a := qualityLiveAssessment(t, `func TestContract(t *testing.T) {if got,err:=Classify(1);got!="accepted"||err!=nil {t.Fatal(got,err)}}`)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	var got time.Time
+	original := http.DefaultTransport
+	http.DefaultTransport = qualityRequestTransport(func(r *http.Request) (*http.Response, error) {
+		got, _ = r.Context().Deadline()
+		return nil, errors.New("stop after inspecting request deadline")
+	})
+	t.Cleanup(func() { http.DefaultTransport = original })
+	_, _ = AssessBatch(ctx, a, a.Items, intelligence.Config{Enabled: true, BaseURL: "http://127.0.0.1:1", Model: "fixture"})
+	if !got.Equal(want) {
+		t.Fatalf("review request replaced owner deadline %s with %s", want, got)
+	}
+}
+
+func TestQualityBatchProviderFailureDoesNotBecomeInsufficientEvidence(t *testing.T) {
+	a := largeFactsAssessment()
+	a.Version = EvidenceRubricVersion
+	requests := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+	}))
+	defer provider.Close()
+	results, err := AssessBatch(t.Context(), a, a.Items, intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture"})
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("provider failure must be returned to the job owner, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("provider failure must stop subsequent batches, got %d requests", requests)
+	}
+	for _, item := range results {
+		if item.Status != StatusUnreviewed {
+			t.Fatalf("provider failure became an evidence judgment: %+v", item)
+		}
+	}
+}
+
+func TestQualityBatchRequestCancellation(t *testing.T) {
+	a := qualityLiveAssessment(t, `func TestContract(t *testing.T) {Classify(1)}`)
+	ready := make(chan struct{})
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(ready)
+		<-r.Context().Done()
+	}))
+	defer provider.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := AssessBatch(ctx, a, a.Items, intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture"})
+		done <- err
+	}()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("assessment did not reach provider")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller cancellation was lost: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight assessment ignored cancellation")
+	}
+}
+
+func TestQualitySavedPromptSize(t *testing.T) {
+	directory, id := os.Getenv("GO_REVIEW_QUALITY_PROMPT_DIRECTORY"), os.Getenv("GO_REVIEW_QUALITY_PROMPT_ID")
+	if directory == "" || id == "" {
+		t.Skip("opt-in read-only saved-archive prompt measurement")
+	}
+	a, err := (Store{Directory: directory}).Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := append([]Responsibility{}, a.Items...)
+	for i := range items {
+		if items[i].Status != StatusExcluded {
+			items[i].Status = StatusUnreviewed
+		}
+	}
+	batches, err := PlanBatches(a, items, intelligence.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldTotal, newTotal, oldMax, newMax := 0, 0, 0, 0
+	for _, batch := range batches {
+		initial, _, err := batchContext(t.Context(), a, batch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range initial.Tests {
+			initial.Tests[i].Facts.Predicates = nil
+		}
+		raw, err := json.Marshal(initial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var legacy map[string]any
+		if err := json.Unmarshal(raw, &legacy); err != nil {
+			t.Fatal(err)
+		}
+		legacy["diagnostics"] = a.Diagnostics
+		oldRaw, err := json.Marshal(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldTotal += len(oldRaw)
+		newTotal += len(raw)
+		oldMax = max(oldMax, len(oldRaw))
+		newMax = max(newMax, len(raw))
+	}
+	t.Logf("read-only saved assessment %s: tests=%d batches=%d; initial-context total old=%d new=%d bytes; largest old=%d new=%d bytes; no model requests", id, len(items), len(batches), oldTotal, newTotal, oldMax, newMax)
+}
 
 func TestQualityBatchContextSelectsCalledProductionBeyondFilePrefix(t *testing.T) {
 	a := qualityLiveAssessment(t, `func TestContract(t *testing.T) {got,err:=Classify(1);if got!="accepted"||err!=nil {t.Fatal(got,err)}}`)

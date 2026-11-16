@@ -39,8 +39,10 @@ type Provider struct {
 	RequireTool     bool
 	MaxOutputTokens int
 	UnboundedOutput bool
-	ResponseSchema  json.RawMessage
-	SchemaName      string
+	// Long-running assessments follow the job owner's cancellation/deadline.
+	WaitForCompletion bool
+	ResponseSchema    json.RawMessage
+	SchemaName        string
 }
 
 // Complete assembles indexed tool-call fragments while forwarding only user-facing
@@ -105,7 +107,11 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 	if p.Config.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.Config.APIKey)
 	}
-	client := http.Client{Timeout: 180 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("provider redirects are not allowed") }}
+	timeout := 180 * time.Second
+	if p.WaitForCompletion {
+		timeout = 0
+	}
+	client := http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("provider redirects are not allowed") }}
 	response, err := client.Do(req)
 	if err != nil {
 		return result, fmt.Errorf("model request: %w", err)

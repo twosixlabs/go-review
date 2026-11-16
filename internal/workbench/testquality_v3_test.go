@@ -151,103 +151,74 @@ func TestQualityLargeJobPublishesCollectiveGroupsBeforeOverallSynthesis(t *testi
 				Location: review.Location{FileID: "tests", Line: fset.Position(fn.Pos()).Line, EndLine: fset.Position(fn.End()).Line}})
 		}
 	}
+	other := tests
+	other.File.ID, other.File.Package = "other-tests", "other"
+	other.Declarations = append([]review.TestDeclaration(nil), tests.Declarations[64:]...)
+	tests.Declarations = tests.Declarations[:64]
+	for i := range other.Declarations {
+		other.Declarations[i].Location.FileID = other.File.ID
+	}
 	production := "package example\nfunc F() int {return 1}\n"
 	report := &review.Report{Root: t.TempDir(), Module: "example",
 		Files:       []review.File{{ID: "production", Path: "f.go", Package: "example", Source: production, SHA256: testquality.Digest([]byte(production))}},
-		TestSources: []review.TestSource{tests}}
+		TestSources: []review.TestSource{tests, other}}
 	ready, release := make(chan struct{}), make(chan struct{})
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Messages []intelligence.Message
-			Format   struct {
-				Type   string
-				Schema struct{ Name string } `json:"json_schema"`
-			} `json:"response_format"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
+		request, scope, ok := qualityFixtureDecode(t, r)
+		if !ok {
+			http.Error(w, "invalid scope", http.StatusBadRequest)
 			return
 		}
-		var initial struct {
-			Tests  []struct{ Test testquality.Responsibility }
-			Groups []json.RawMessage
-		}
-		if err := json.Unmarshal([]byte(request.Messages[1].Content), &initial); err != nil {
-			t.Error(err)
+		qualityFixtureCheckTools(t, request)
+		if len(scope.Groups) != 0 {
+			contract := testquality.Citation{SnapshotID: scope.Groups[0].SnapshotID, FileID: "production", StartLine: 2, EndLine: 2}
+			switch len(request.Messages) {
+			case 1:
+				close(ready)
+				select {
+				case <-release:
+				case <-r.Context().Done():
+					return
+				}
+				qualityFixtureRespond(w, qualityFixtureRead(contract))
+			case 3:
+				qualityFixtureRespond(w, qualityFixtureGroup(contract, "Related tests assert the return value."))
+			default:
+				qualityFixtureRespond(w)
+			}
 			return
 		}
-		if len(initial.Groups) > 0 && request.Format.Type == "" {
-			close(ready)
-			select {
-			case <-release:
-			case <-r.Context().Done():
-				return
+		first, last := scope.item(scope.Tests[0]), scope.item(scope.Tests[len(scope.Tests)-1])
+		span := first.Declaration
+		span.EndLine = last.Declaration.EndLine
+		contract := testquality.Citation{SnapshotID: first.Identity.SnapshotID, FileID: "production", StartLine: 2, EndLine: 2}
+		if len(request.Messages) == 1 {
+			qualityFixtureRespond(w, qualityFixtureRead(span), qualityFixtureRead(contract))
+			return
+		}
+		recorded := 0
+		for _, message := range request.Messages {
+			if message.Role == "tool" && strings.Contains(message.Content, `"recorded":true`) {
+				recorded++
 			}
 		}
-		content := "Evidence ready."
-		if request.Format.Type != "" {
-			var receipt struct {
-				References map[string]testquality.Citation
+		if recorded < len(scope.Tests) {
+			end := min(recorded+30, len(scope.Tests))
+			calls := make([]qualityFixtureCall, 0, end-recorded)
+			for _, item := range scope.Tests[recorded:end] {
+				calls = append(calls, qualityFixtureTest(scope.item(item), 3, 3, "The test checks the result."))
 			}
-			if err := json.Unmarshal([]byte(request.Messages[len(request.Messages)-1].Content), &receipt); err != nil {
-				t.Error(err)
-				return
-			}
-			var contract testquality.Citation
-			for _, c := range receipt.References {
-				if c.FileID == "production" {
-					contract = c
-					break
-				}
-			}
-			if contract.FileID == "" {
-				t.Error("called production evidence missing")
-				return
-			}
-			ratings := func(dimensions []testquality.Dimension, evidence []testquality.Citation) []testquality.Rating {
-				value := 3
-				out := []testquality.Rating{}
-				for _, dimension := range dimensions {
-					out = append(out, testquality.Rating{Dimension: dimension, State: testquality.RatingAssessed,
-						Value: &value, Rationale: "Source-backed advisory finding", Evidence: evidence})
-				}
-				return out
-			}
-			proposal := map[string]any{}
-			if request.Format.Schema.Name == "submit_batch" {
-				items := []any{}
-				for _, test := range initial.Tests {
-					items = append(items, map[string]any{"identity": test.Test.Identity, "ratings": ratings(
-						[]testquality.Dimension{testquality.Craftsmanship, testquality.AssertionStrength},
-						[]testquality.Citation{test.Test.Declaration, contract}), "findings": []any{}})
-				}
-				proposal["items"] = items
-			} else {
-				proposal["ratings"] = ratings([]testquality.Dimension{testquality.BehaviorAdequacy, testquality.ConditionAdequacy}, []testquality.Citation{contract})
-				proposal["findings"] = []any{}
-				expectations := []testquality.ExpectedBehavior{}
-				if len(initial.Groups) == 0 {
-					expectations = append(expectations, testquality.ExpectedBehavior{ID: "result", Description: "Returns one", Basis: "implementation-derived",
-						State: "supported", Rationale: "Related tests assert the result.", Evidence: []testquality.Citation{contract},
-						Tests: []testquality.Identity{}, Conditions: []testquality.ExpectedCondition{}})
-				}
-				proposal["expectations"] = expectations
-			}
-			raw, _ := json.Marshal(proposal)
-			converted, err := qualityProposalLabels(raw, request.Messages[len(request.Messages)-1].Content)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			content = string(converted)
+			qualityFixtureRespond(w, calls...)
+		} else if recorded == len(scope.Tests) {
+			qualityFixtureRespond(w, qualityFixtureGroup(contract, "Related tests assert the return value."))
+		} else {
+			qualityFixtureRespond(w)
 		}
-		raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}, "finish_reason": "stop"}}})
-		fmt.Fprintf(w, "data: %s\n\n", raw)
 	}))
 	defer provider.Close()
 	s := New(report)
 	s.qualityStore = testquality.Store{Directory: t.TempDir()}
-	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture", MaxSteps: 2, ContextBytes: 65536})
+	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture", MaxSteps: 8, ContextBytes: 1048576})
 	launch := qualityRequest(t, s, "/api/test-quality/start", `{"allowExecution":false}`)
 	if launch.Code != 202 {
 		t.Fatal(launch.Body.String())
@@ -269,21 +240,29 @@ func TestQualityLargeJobPublishesCollectiveGroupsBeforeOverallSynthesis(t *testi
 	}()
 	select {
 	case <-ready:
-	case <-time.After(20 * time.Second):
+	case <-job.done:
+		saved, _ := s.qualityStore.Load(result.ID)
+		t.Fatalf("large job stopped before overall synthesis: %+v", qualityCompact(saved))
+	case <-time.After(60 * time.Second):
 		t.Fatal("large job never reached overall synthesis")
 	}
 	checkpoint, err := s.qualityStore.Load(result.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.Suite == nil || len(checkpoint.Suite.Expectations) < 2 || checkpoint.Suite.Status != testquality.StatusInsufficient {
+	if checkpoint.Suite == nil || len(checkpoint.Suite.Groups) != 2 || checkpoint.Suite.Status != testquality.StatusInsufficient {
 		if checkpoint.Suite == nil {
 			t.Fatal("completed collective groups were not persisted before overall synthesis")
 		}
 		t.Fatalf("completed collective groups were not retained: status=%s reason=%s", checkpoint.Suite.Status, checkpoint.Suite.Reason)
 	}
-	data, err := s.queryTestQuality(t.Context(), testquality.QueryInput{AssessmentID: result.ID, Operation: "suite"})
-	if err != nil || !strings.Contains(string(data), `"scopeCount":128`) {
+	for _, item := range checkpoint.Items {
+		if item.Status != testquality.StatusScored {
+			t.Fatalf("individual result not persisted before synthesis: %+v", item)
+		}
+	}
+	data, err := s.queryTestQuality(t.Context(), testquality.QueryInput{AssessmentID: result.ID, Operation: "suite-groups"})
+	if err != nil || strings.Count(string(data), `"scopeCount":64`) != 2 {
 		t.Fatalf("active readers lost collective scope: %s %v", data, err)
 	}
 	close(release)

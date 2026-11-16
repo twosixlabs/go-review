@@ -147,13 +147,28 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 			return json.Marshal(SuiteAssessment{Status: StatusUnreviewed, Reason: "Collective judgment has not been performed."})
 		}
 		return json.Marshal(map[string]any{"status": a.Suite.Status, "ratings": a.Suite.Ratings, "reason": a.Suite.Reason, "scopeCount": len(a.Suite.Scope), "expectationCount": len(a.Suite.Expectations)})
+	case "suite-groups":
+		type groupView struct {
+			SnapshotID string    `json:"snapshotID"`
+			Package    string    `json:"package"`
+			ScopeCount int       `json:"scopeCount"`
+			Ratings    []Rating  `json:"ratings"`
+			Findings   []Finding `json:"findings,omitempty"`
+		}
+		var groups []groupView
+		if a.Suite != nil {
+			for _, group := range a.Suite.Groups {
+				groups = append(groups, groupView{group.SnapshotID, group.Package, len(group.Scope), group.Ratings, group.Findings})
+			}
+		}
+		return page(groups, input)
 	case "diagnostics":
-		records := []map[string]any{}
+		records := []diagnosticSummary{}
 		for i, record := range a.Diagnostics {
-			records = append(records, map[string]any{"diagnosticIndex": i, "request": record.Request, "status": record.Status, "error": record.Error, "sourceVerified": record.SourceVerified, "runCount": len(record.Runs), "artifactCount": len(record.Artifacts)})
+			records = append(records, summarizeDiagnostic(i, record))
 		}
 		return page(records, input)
-	case "diagnostic-runs", "diagnostic-attempts", "diagnostic-artifacts":
+	case "diagnostic-runs", "diagnostic-attempts", "diagnostic-commands", "diagnostic-artifacts":
 		if input.DiagnosticIndex >= len(a.Diagnostics) {
 			return nil, fmt.Errorf("diagnostic index is outside this assessment")
 		}
@@ -161,9 +176,12 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		if input.Operation == "diagnostic-artifacts" {
 			return page(record.Artifacts, input)
 		}
-		if input.Operation == "diagnostic-attempts" {
+		if input.Operation == "diagnostic-attempts" || input.Operation == "diagnostic-commands" {
 			if input.RunIndex >= len(record.Runs) {
 				return nil, fmt.Errorf("run index is outside this diagnostic")
+			}
+			if input.Operation == "diagnostic-commands" {
+				return page(record.Runs[input.RunIndex].Commands, input)
 			}
 			return page(record.Runs[input.RunIndex].Attempts, input)
 		}
@@ -228,7 +246,7 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		return page(selected, input)
 	case "overview":
 		operations := []string{"indicators", "modules", "unavailable", "findings", "tests", "test", "finding", "source", "evidence"}
-		operations = append(operations, "facts", "suite", "expectations", "expectation", "conditions", "condition", "suite-findings", "diagnostics", "diagnostic-runs", "diagnostic-attempts", "diagnostic-artifacts")
+		operations = append(operations, "facts", "suite", "suite-groups", "expectations", "expectation", "conditions", "condition", "suite-findings", "diagnostics", "diagnostic-runs", "diagnostic-attempts", "diagnostic-commands", "diagnostic-artifacts")
 		summary, err := AggregateVersion(a.Version, a.Items)
 		if err != nil {
 			return nil, err
@@ -267,7 +285,7 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		return json.Marshal(map[string]any{"assessmentID": a.ID, "version": a.Version, "root": a.Root, "reviewID": a.ReviewID,
 			"status": a.Status, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "provider": a.Provider, "model": a.Model,
 			"summary": summary, "unit": "test", "categories": categories, "moduleCount": len(a.Reports), "unavailableModuleCount": len(a.Unavailable),
-			"phase": a.Phase, "phaseMillis": a.PhaseMillis, "policy": a.Policy, "diagnosticReason": a.DiagnosticReason, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence,
+			"phase": a.Phase, "activity": a.Activity, "phaseMillis": a.PhaseMillis, "policy": a.Policy, "diagnosticReason": a.DiagnosticReason, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence,
 			"limitations": []string{"Scores equally weight tests with supported individual ratings. Unassessed dimensions do not count as zero.", "Table cases and subtests belong to their enclosing test."},
 			"operations":  operations})
 	case "findings":

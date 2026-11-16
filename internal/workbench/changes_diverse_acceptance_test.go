@@ -12,6 +12,7 @@ import (
 
 	"github.com/russellbrasser/go-review/internal/changes"
 	"github.com/russellbrasser/go-review/internal/review"
+	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
 func TestChangeDiverseInteractiveAcceptance(t *testing.T) {
@@ -135,6 +136,7 @@ func TestChangeDiverseInteractiveAcceptance(t *testing.T) {
 		}
 	}
 	s := New(report)
+	s.qualityStore = testquality.Store{Directory: t.TempDir()}
 	s.comparison = c
 	server := httptest.NewServer(s.Handler())
 	defer server.Close()

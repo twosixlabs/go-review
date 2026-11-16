@@ -7,19 +7,34 @@
 # embedding-live uses only configured embeddings and synthetic data;
 # retrieval-build OUTPUT writes a verification binary to the specified path.
 # quality selectors validate evidence-first facts, judgments, execution, archives and UI.
+# quality-agent runs native Test Quality agent regression tests.
 # quality-live [SCENARIO] checks advisory-result delivery with the configured local model on owned contracts,
+# quality-live retained reviews one small package from GO_REVIEW_QUALITY_ARCHIVE,
+# GO_REVIEW_QUALITY_ASSESSMENT and GO_REVIEW_QUALITY_PACKAGE without fresh execution.
+# It saves provider requests and an independent assessment in the trace directory.
+# quality-live exercises runs mixed-quality multi-package review, one authorized
+# diagnostic, and cancellation/reopening with the configured local model.
+# The mixed and cancel cases also export actual responses for browser replay.
 # Requires GO_REVIEW_QUALITY_TRACE_DIR; uses production MCP/tools and request
 # budgets for individual and collective assessment, not predetermined judgments.
 # Stops at the first protocol/evidence failure.
 # Each live case owns a five-minute context; the aggregate test timeout allows
 # all seven cases to finish without changing those per-case execution bounds.
 # quality-browser exports saved production-reader responses for read-only browser replay.
+# quality-prompts ARCHIVE_DIRECTORY ASSESSMENT_ID measures saved prompt contexts without inference.
 # quality-build OUTPUT checks dependent Go packages and writes a verification binary.
 set -eu
 cd "$(dirname "$0")/.."
 
 selector=${1:-}
 case "$selector" in
+  quality-agent)
+    go test ./internal/workbench ./internal/testquality -run '^TestQualityAgent' -count=1
+    ;;
+  quality-prompts)
+    test "$#" -eq 3 || { echo "quality-prompts requires ARCHIVE_DIRECTORY ASSESSMENT_ID" >&2; exit 2; }
+    GO_REVIEW_QUALITY_PROMPT_DIRECTORY="$2" GO_REVIEW_QUALITY_PROMPT_ID="$3" go test ./internal/testquality -run '^TestQualitySavedPromptSize$' -count=1 -v
+    ;;
   quality-facts)
     go test ./internal/testquality -run 'TestQualityFacts|TestQualityExecutionFacts|TestStore|TestAggregate|TestQuery' -count=1
     ;;
@@ -48,6 +63,21 @@ case "$selector" in
     ;;
   quality-live)
     scenario=${2:-}
+    case "$scenario" in mixed|diagnostic|cancel|exercises)
+      pattern='^TestQualityAgentLive(Mixed|Diagnostic|Cancel)$'
+      case "$scenario" in
+        mixed) pattern='^TestQualityAgentLiveMixed$';;
+        diagnostic) pattern='^TestQualityAgentLiveDiagnostic$';;
+        cancel) pattern='^TestQualityAgentLiveCancel$';;
+      esac
+      GO_REVIEW_QUALITY_LIVE=1 go test ./internal/workbench -run "$pattern" -count=1 -v -timeout 22m
+      exit
+      ;;
+    esac
+    if test "$scenario" = retained; then
+      GO_REVIEW_QUALITY_LIVE=1 go test ./internal/workbench -run '^TestQualityAgentLiveRetained$' -count=1 -v -timeout 8m
+      exit
+    fi
     case "$scenario" in ""|combined|split|job|missing-behavior|missing-condition|logging-only|contracted-interaction|remaining) ;; *) echo "unknown quality-live fixture" >&2; exit 2;; esac
     pattern='^TestQualityLive$'
     if test "$scenario" = remaining; then pattern="$pattern/(split|missing-behavior|missing-condition|logging-only|contracted-interaction)$"
@@ -128,7 +158,7 @@ case "$selector" in
     go build -o .work/go-review ./cmd/go-review
     ;;
   *)
-    printf 'usage: %s {sources|query|provider|index|transport|opinions|workflow|chat|ui|all|quality-facts|quality-model|quality-performance|quality-execution|quality-workflow|quality-ui|quality-browser|embedding-provider|retrieval-core|retrieval-store|retrieval-workflow|retrieval-quality|retrieval-ui|embedding-live} or {quality-live [SCENARIO]} or {quality-build|retrieval-build OUTPUT} or {provider-live|prompt-live URL MODEL [SCENARIO]} or {live WORKBENCH_URL PROMPT [navigate]}\n' "$0" >&2
+    printf 'usage: %s {sources|query|provider|index|transport|opinions|workflow|chat|ui|all|quality-facts|quality-model|quality-performance|quality-execution|quality-workflow|quality-ui|quality-browser|embedding-provider|retrieval-core|retrieval-store|retrieval-workflow|retrieval-quality|retrieval-ui|embedding-live} or {quality-prompts ARCHIVE_DIRECTORY ASSESSMENT_ID} or {quality-live [SCENARIO]} or {quality-build|retrieval-build OUTPUT} or {provider-live|prompt-live URL MODEL [SCENARIO]} or {live WORKBENCH_URL PROMPT [navigate]}\n' "$0" >&2
     exit 2
     ;;
 esac

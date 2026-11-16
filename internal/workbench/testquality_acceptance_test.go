@@ -17,111 +17,106 @@ import (
 	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
-func qualityProposalLabels(data json.RawMessage, receipt string) (json.RawMessage, error) {
-	var context struct {
-		References map[string]testquality.Citation
+type qualityFixtureRequest struct {
+	Messages []intelligence.Message `json:"messages"`
+	Tools    []intelligence.Tool    `json:"tools"`
+}
+
+type qualityFixtureScope struct {
+	SnapshotID string                        `json:"snapshotID"`
+	Module     string                        `json:"module"`
+	Package    string                        `json:"package"`
+	Tests      []qualityFixtureItem          `json:"tests"`
+	Groups     []testquality.GroupAssessment `json:"groups"`
+}
+
+type qualityFixtureItem struct {
+	SymbolID  string `json:"symbolID"`
+	Name      string `json:"name"`
+	FileID    string `json:"fileID"`
+	StartLine int    `json:"startLine"`
+	EndLine   int    `json:"endLine"`
+}
+
+func (scope qualityFixtureScope) item(entry qualityFixtureItem) testquality.Responsibility {
+	return testquality.Responsibility{
+		Identity:    testquality.Identity{SnapshotID: scope.SnapshotID, Module: scope.Module, SymbolID: entry.SymbolID},
+		Name:        entry.Name,
+		Package:     scope.Package,
+		Declaration: testquality.Citation{SnapshotID: scope.SnapshotID, FileID: entry.FileID, StartLine: entry.StartLine, EndLine: entry.EndLine},
 	}
-	if err := json.Unmarshal([]byte(receipt), &context); err != nil {
-		return nil, err
+}
+
+func qualityFixtureDecode(t *testing.T, r *http.Request) (qualityFixtureRequest, qualityFixtureScope, bool) {
+	t.Helper()
+	var request qualityFixtureRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		t.Error(err)
+		return request, qualityFixtureScope{}, false
 	}
-	var proposal map[string]any
-	if err := json.Unmarshal(data, &proposal); err != nil {
-		return nil, err
+	if len(request.Messages) == 0 || request.Messages[0].Role != "system" {
+		t.Error("agent did not supply its assigned scope in a system message")
+		return request, qualityFixtureScope{}, false
 	}
-	convert := func(owner map[string]any) error {
-		ratings, ok := owner["ratings"].([]any)
-		if !ok {
-			return fmt.Errorf("fixture proposal requires ratings")
+	text := request.Messages[0].Content
+	for i := range text {
+		if text[i] != '{' {
+			continue
 		}
-		for _, entry := range ratings {
-			rating, ok := entry.(map[string]any)
-			if !ok {
-				return fmt.Errorf("fixture rating must be an object")
-			}
-			if _, ok := rating["evidence"]; !ok {
-				rating["evidence"] = []any{}
-			}
-			if rating["value"] == nil {
-				rating["value"] = rating["state"]
-				delete(rating, "state")
-				continue
-			}
-			number, ok := rating["value"].(float64)
-			if !ok || number < 0 || number > 4 || number != float64(int(number)) {
-				return fmt.Errorf("invalid fixture rubric value: %v", rating["value"])
-			}
-			rating["value"] = [...]string{"absent", "weak", "material-issues", "strong", "convincing"}[int(number)]
-			delete(rating, "state")
+		var scope qualityFixtureScope
+		if json.Unmarshal([]byte(text[i:]), &scope) == nil && (len(scope.Tests) != 0 || len(scope.Groups) != 0) {
+			return request, scope, true
 		}
-		return nil
 	}
-	if raw, ok := proposal["items"]; ok {
-		items, ok := raw.([]any)
-		if !ok {
-			return nil, fmt.Errorf("fixture items must be an array")
+	t.Errorf("missing assigned group or synthesis scope: %s", text)
+	return request, qualityFixtureScope{}, false
+}
+
+type qualityFixtureCall struct {
+	name string
+	args any
+}
+
+func qualityFixtureRespond(w http.ResponseWriter, calls ...qualityFixtureCall) {
+	if len(calls) == 0 {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Review complete.\"},\"finish_reason\":\"stop\"}]}\n\n")
+		return
+	}
+	var encoded []any
+	for i, call := range calls {
+		args, _ := json.Marshal(call.args)
+		encoded = append(encoded, map[string]any{"index": i, "id": fmt.Sprintf("call-%d", i), "function": map[string]string{"name": call.name, "arguments": string(args)}})
+	}
+	data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": encoded}, "finish_reason": "tool_calls"}}})
+	fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+func qualityFixtureCheckTools(t *testing.T, request qualityFixtureRequest) {
+	t.Helper()
+	for _, message := range request.Messages {
+		if message.Role == "tool" && strings.Contains(message.Content, `"error"`) {
+			t.Errorf("agent tool failed: %s", message.Content)
 		}
-		for _, entry := range items {
-			item, ok := entry.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("fixture item must be an object")
-			}
-			if err := convert(item); err != nil {
-				return nil, err
-			}
-		}
-	} else if err := convert(proposal); err != nil {
-		return nil, err
 	}
-	var bind func(any) error
-	bind = func(value any) error {
-		switch node := value.(type) {
-		case map[string]any:
-			for key, child := range node {
-				if key == "evidence" {
-					entries, ok := child.([]any)
-					if !ok {
-						return fmt.Errorf("fixture evidence requires an array")
-					}
-					ids := []string{}
-					for _, entry := range entries {
-						raw, err := json.Marshal(entry)
-						if err != nil {
-							return err
-						}
-						var citation testquality.Citation
-						if err := json.Unmarshal(raw, &citation); err != nil {
-							return err
-						}
-						id := ""
-						for candidate, source := range context.References {
-							if citation.SnapshotID == source.SnapshotID && citation.FileID == source.FileID && citation.StartLine >= source.StartLine && citation.EndLine <= source.EndLine {
-								id = candidate
-								break
-							}
-						}
-						if id == "" {
-							return fmt.Errorf("fixture evidence is not inspected: %+v", citation)
-						}
-						ids = append(ids, id)
-					}
-					node[key] = ids
-				} else if err := bind(child); err != nil {
-					return err
-				}
-			}
-		case []any:
-			for _, child := range node {
-				if err := bind(child); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := bind(proposal); err != nil {
-		return nil, err
-	}
-	return json.Marshal(proposal)
+}
+
+func qualityFixtureRead(c testquality.Citation) qualityFixtureCall {
+	return qualityFixtureCall{"review_source", map[string]any{"snapshotID": c.SnapshotID, "fileID": c.FileID, "startLine": c.StartLine, "endLine": c.EndLine}}
+}
+
+func qualityFixtureTest(item testquality.Responsibility, craft, assertion int, rationale string) qualityFixtureCall {
+	return qualityFixtureCall{"record_test", map[string]any{
+		"snapshotID": item.Identity.SnapshotID, "symbolID": item.Identity.SymbolID,
+		"craftsmanship": craft, "assertionStrength": assertion, "rationale": rationale,
+		"fileID": item.Declaration.FileID, "startLine": item.Declaration.StartLine, "endLine": item.Declaration.EndLine,
+	}}
+}
+
+func qualityFixtureGroup(c testquality.Citation, rationale string) qualityFixtureCall {
+	return qualityFixtureCall{"record_group", map[string]any{
+		"snapshotID": c.SnapshotID, "behaviorAdequacy": 2, "conditionAdequacy": 2,
+		"rationale": rationale, "fileID": c.FileID, "startLine": c.StartLine, "endLine": c.EndLine,
+	}}
 }
 
 func TestQualityEndToEndProviderSavedHTTPMCPAndChat(t *testing.T) {
@@ -130,91 +125,51 @@ func TestQualityEndToEndProviderSavedHTTPMCPAndChat(t *testing.T) {
 	s.review.Modules[0].Report.TestSources[0].File.Source = text
 	s.review.Modules[0].Report.TestSources[0].File.SHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))
 	var calls atomic.Int32
-	var snapshot string
+	var snapshot atomic.Value
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		var body struct {
-			Messages []intelligence.Message `json:"messages"`
-			Tools    []intelligence.Tool    `json:"tools"`
-			Format   struct {
-				Type   string `json:"type"`
-				Schema struct {
-					Name string `json:"name"`
-				} `json:"json_schema"`
-			} `json:"response_format"`
+		request, scope, ok := qualityFixtureDecode(t, r)
+		if !ok {
+			http.Error(w, "invalid scope", http.StatusBadRequest)
+			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		var initial struct {
-			Tests []struct {
-				Test   testquality.Responsibility `json:"test"`
-				Source json.RawMessage            `json:"source"`
-			} `json:"tests"`
-			Shared []json.RawMessage `json:"shared"`
-		}
-		if err := json.Unmarshal([]byte(body.Messages[1].Content), &initial); err != nil {
-			t.Error(err)
-		}
-		item := initial.Tests[0].Test
-		snapshot = item.Identity.SnapshotID
-		shared, _ := json.Marshal(initial.Shared)
-		if item.Name != "TestF" || !strings.Contains(string(initial.Tests[0].Source), "t.Fatal") || !strings.Contains(string(shared), `func F`) {
-			t.Error("assessment must start from the actual test, with production only as context")
-		}
-		name := "review_source"
-		args, _ := json.Marshal(map[string]any{"snapshotID": snapshot, "fileID": "f", "startLine": 2, "endLine": 2})
-		collective := body.Format.Schema.Name == "submit_suite"
-		for _, tool := range body.Tools {
-			collective = collective || tool.Function.Name == "submit_suite"
-		}
-		if body.Format.Type == "json_schema" || body.Messages[len(body.Messages)-1].Role == "tool" || collective {
-			if !collective && body.Format.Type == "" && !strings.Contains(body.Messages[len(body.Messages)-1].Content, "return 1") {
-				t.Error("production context unavailable")
+		qualityFixtureCheckTools(t, request)
+		if len(scope.Groups) != 0 {
+			c := testquality.Citation{SnapshotID: scope.Groups[0].SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
+			switch len(request.Messages) {
+			case 1:
+				qualityFixtureRespond(w, qualityFixtureRead(c))
+			case 3:
+				qualityFixtureRespond(w, qualityFixtureGroup(c, "The combined tests check the return value."))
+			default:
+				qualityFixtureRespond(w)
 			}
-			value := 2
-			citations := []testquality.Citation{{SnapshotID: snapshot, FileID: "f", StartLine: 2, EndLine: 2}, {SnapshotID: snapshot, FileID: "test", StartLine: 3, EndLine: 3}}
-			ratings := []testquality.Rating{}
-			dimensions := []testquality.Dimension{testquality.AssertionStrength, testquality.Craftsmanship}
-			if collective {
-				dimensions = []testquality.Dimension{testquality.BehaviorAdequacy, testquality.ConditionAdequacy}
-			}
-			for _, d := range dimensions {
-				ratings = append(ratings, testquality.Rating{Dimension: d, State: testquality.RatingAssessed, Value: &value, Rationale: "One meaningful return-value assertion; limited case diversity.", Evidence: citations})
-			}
-			item.Status, item.Ratings, item.Findings = testquality.StatusScored, ratings, []testquality.Finding{{Category: "assertion-strength", Kind: "inference", Title: "Single retained case", Rationale: "The test checks the return value.", Consequence: "Only this scenario is represented.", Suggestion: "Review whether additional contract variations are relevant.", Evidence: citations}}
-			name = "submit_batch"
-			args, _ = json.Marshal(map[string]any{"items": []testquality.Responsibility{item}})
-			if collective {
-				name = "submit_suite"
-				args, _ = json.Marshal(map[string]any{"status": testquality.StatusScored, "ratings": ratings, "expectations": []testquality.ExpectedBehavior{{ID: "return-one", Description: "Returns one", Basis: "implementation-derived", State: "supported", Rationale: "Combined test checks the return value.", Evidence: citations, Tests: []testquality.Identity{item.Identity}, Conditions: []testquality.ExpectedCondition{}}}, "findings": []testquality.Finding{}})
-			}
+			return
 		}
-		delta := map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": fmt.Sprint(calls.Load()), "function": map[string]string{"name": name, "arguments": string(args)}}}}
-		finish := "tool_calls"
-		if body.Format.Type == "json_schema" {
-			if collective {
-				var proposal map[string]any
-				if err := json.Unmarshal(args, &proposal); err != nil {
-					t.Error(err)
-				}
-				delete(proposal, "status")
-				delete(proposal, "reason")
-				args, _ = json.Marshal(proposal)
-			}
-			converted, err := qualityProposalLabels(args, body.Messages[len(body.Messages)-1].Content)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			args = converted
-			delta, finish = map[string]any{"content": string(args)}, "stop"
+		item := scope.item(scope.Tests[0])
+		snapshot.Store(item.Identity.SnapshotID)
+		if item.Name != "TestF" {
+			t.Error("assessment must target the retained test")
 		}
-		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": delta, "finish_reason": finish}}})
-		fmt.Fprintf(w, "data: %s\n\n", data)
+		production := testquality.Citation{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
+		switch len(request.Messages) {
+		case 1:
+			qualityFixtureRespond(w, qualityFixtureRead(item.Declaration), qualityFixtureRead(production))
+		case 4:
+			if !strings.Contains(request.Messages[2].Content, "t.Fatal") || !strings.Contains(request.Messages[3].Content, "return 1") {
+				t.Error("test and production source were not available")
+			}
+			record := qualityFixtureTest(item, 2, 2, "One meaningful return-value assertion; limited case diversity.")
+			record.args.(map[string]any)["findingTitle"] = "Single retained case"
+			record.args.(map[string]any)["findingRationale"] = "The test checks the return value."
+			record.args.(map[string]any)["findingSuggestion"] = "Review relevant contract variations."
+			qualityFixtureRespond(w, record, qualityFixtureGroup(production, "One case checks the return value."))
+		default:
+			qualityFixtureRespond(w)
+		}
 	}))
 	defer provider.Close()
-	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "deterministic-provider", MaxSteps: 3})
+	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "deterministic-provider", MaxSteps: 6})
 	// Cancelling the initiating request AFTER acceptance must not cancel the job.
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest("POST", "http://127.0.0.1/api/test-quality/start", strings.NewReader(`{}`)).WithContext(ctx)
@@ -239,7 +194,7 @@ func TestQualityEndToEndProviderSavedHTTPMCPAndChat(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("assessment did not finish")
 	}
-	if calls.Load() > 5 {
+	if calls.Load() > 6 {
 		t.Fatalf("redundant provider requests: %d", calls.Load())
 	}
 	assessmentCalls := calls.Load()
@@ -250,7 +205,7 @@ func TestQualityEndToEndProviderSavedHTTPMCPAndChat(t *testing.T) {
 	if a.Status != "completed" || a.Items[0].Status != testquality.StatusScored {
 		t.Fatalf("assessment: %+v", qualityCompact(a))
 	}
-	input := testquality.QueryInput{AssessmentID: launch.ID, Operation: "test", SnapshotID: snapshot, SymbolID: "TestF"}
+	input := testquality.QueryInput{AssessmentID: launch.ID, Operation: "test", SnapshotID: snapshot.Load().(string), SymbolID: "TestF"}
 	body, _ := json.Marshal(input)
 	httpResult := qualityRequest(t, s, "/api/test-quality/query", string(body))
 	if httpResult.Code != 200 {

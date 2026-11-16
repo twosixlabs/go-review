@@ -68,6 +68,10 @@ func (s *Server) prepareQualityRetrieval(ctx context.Context, a *testquality.Ass
 // One queue owner performs parsing, diagnostics and model calls. Readers see
 // only published results; model input never shares the evolving item slice.
 func (s *Server) runEvidenceQuality(ctx context.Context, job *qualityJob, previous <-chan struct{}, cfg intelligence.Config) {
+	if cfg.Enabled && s.qualityAssess == nil {
+		s.runAgentQuality(ctx, job, previous, cfg)
+		return
+	}
 	defer close(job.done)
 	defer job.cancel()
 	if previous != nil {
@@ -205,6 +209,10 @@ func (s *Server) runEvidenceQuality(ctx context.Context, job *qualityJob, previo
 				if err := publish("individual-judgments"); err != nil {
 					return err
 				}
+				var providerErr *testquality.ProviderError
+				if errors.As(callErr, &providerErr) {
+					return callErr
+				}
 			}
 			return nil
 		})
@@ -224,6 +232,10 @@ func (s *Server) runEvidenceQuality(ctx context.Context, job *qualityJob, previo
 			}
 			input.Suite = &suite
 			pipelineErr = errors.Join(pipelineErr, suiteErr)
+			var providerErr *testquality.ProviderError
+			if errors.As(suiteErr, &providerErr) {
+				return suiteErr
+			}
 			return ctx.Err()
 		})
 	}

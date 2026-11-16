@@ -811,6 +811,9 @@ Project and package indicators show scores only when the saved source matches
 the open snapshot. A function without a reliable test association is shown as
 **Not assessed**. Selecting a package indicator opens that package's tests.
 Indicators update when an assessment changes state or finishes.
+Status polling preserves the open or closed Assessment details panel for the
+selected assessment. Fresh diagnostic selection limits describe the plan, not
+an exhausted model budget or a finding that tests have unresolved risks.
 Opening a finished assessment verifies its archive once; subsequent navigation
 reuses that immutable snapshot until a different saved assessment is opened.
 Obsolete archive formats are omitted from status listings without logging on
@@ -860,14 +863,15 @@ seed-test declarations, qualified by snapshot, module and test-declaration ID.
 Table cases and subtests are assessed within their enclosing test; benchmarks,
 `TestMain`, helpers and production functions are not separate assessment jobs.
 Retained name exclusions count as excluded tests; files omitted by review scope
-are not reconstructed. The agent receives the selected test source first,
-must inspect its complete body, and must cite that test for each rating.
+are not reconstructed. The agent receives the assigned test identities and
+source locations, must inspect each complete test body, and must cite that test
+for each rating.
 Related tests, helper/mock implementations and production declarations remain
 read-only context. Missing production coverage is not a test-quality score.
 
 Only `test-quality/3` assessments are supported. Obsolete archives are rejected
-on direct access and omitted from listings with a diagnostic. Stored archives
-are not deleted or converted; start a new assessment for current advice.
+on direct access and omitted from listings. Stored archives are not deleted or
+converted; start a new assessment for current advice.
 
 ### Evidence-first execution and storage
 
@@ -875,16 +879,16 @@ are not deleted or converted; start a new assessment for current advice.
 true, explicit false absolutely prohibits fresh execution. The UI shows this
 default-on authorization before launch. The system selects useful bounded
 diagnostics from source-verified retained evaluated membership, without manual
-test reselection. No reviewed pool means no fresh execution. Static sleep or
-package-state-write risks can select limited repeats; passing repeats are not
-proof of reliability. Rerun/repeat/shuffle/race requests are typed and independently
+test reselection. Review agents request diagnostics when useful; no eligible
+retained pool means no fresh execution. Passing repeats are not proof of
+reliability. Rerun/repeat/shuffle/race requests are typed and independently
 validated; arbitrary commands, unknown targets, benchmarks and fuzz campaigns
 are rejected. Shuffle requires multiple eligible top-level tests in a package.
 At most eight diagnostic test commands and three repetitions are authorized.
 Each attempt, explicit shuffle seed, command, failure and artifact is retained
 separately from the original reports. Navigation and queries never execute tests.
 
-Retained sources are parsed once per job and shared helper facts are memoized.
+Deterministic facts are computed on demand; shared helper facts are memoized.
 Source facts also list separate `if`/`for` predicate alternatives for uniquely
 resolved same-package production functions and safely resolvable literal test
 inputs. Their `potentialTruth` is a static interpretation, not proof of execution,
@@ -895,70 +899,38 @@ For two direct integer range comparisons of the same unchanged parameter,
 `mutuallyExclusive` records when their intersection is empty. Those alternatives
 cannot both be true; a simultaneous-input case is not a missing test. Unsupported
 comparisons and larger expressions do not acquire this inference.
-Collective review considers complementary tests, relevant behaviors and usage
-conditions. Large scopes are reviewed in related groups of at most sixteen
-tests, split further when serialized evidence exceeds the context allowance.
-Completed group observations are checkpointed with partial status while review
-continues. Group-local expectation/condition IDs are qualified to avoid
-collisions; each group observation retains its selected-test `scope`, separate
-from optional contributing-test lists. The detail view labels these observations
-as group-scoped rather than whole-suite discovery. Overall ratings are independent judgments over group contributions
-and their cited original sources, never averages of group or individual ratings.
-If a group, synthesis or checkpoint fails, completed observations and the actual
-error remain visible.
-The host does not force scores to match gap opinions or reject
-advice because its static analyzer does not recognize a checking site.
-For a source-derived condition, `predicateID` identifies its source expression,
-not a claim that it evaluates true, in older saved maps. New model submissions
-use source citations instead of specialized predicate identifiers. Condition
-maps need not enumerate every predicate alternative; explicit contributor lists
-are optional. Partial scope remains visible alongside useful advice.
-The rubrics distinguish behavior (what is asserted) from conditions/usage (under
-which inputs or circumstances); both can use the same evidence. Submission
-structure is specified by a standalone constrained JSON response schema after
-evidence gathering through assessment-pinned, read-only MCP tools. Natural
-evidence-phase prose can finish investigation but is never accepted as an
-assessment. Investigation and grading use separate instructions; only the final
-phase receives the rubric and explicit inspected-source references. Individual
-assertion strength evaluates checks present, not suite-wide missing cases.
-Individual context retains checking/helper evidence but leaves collective
-input-partition facts to the suite.
-Final grading receives retained input and actual read results, not provisional
-investigation prose. Collective input excludes prior individual AI ratings and
-findings; those judgments are not evidence of suite adequacy.
-The model schema bounds ratings to the two required
-dimensions and requires a finding's title and rationale; consequence and
-suggestion text are optional. Admission verifies usable structure, dimension
-uniqueness, retained identities and inspected-source citations—not the
-correctness of advisory opinions.
-The host retains known test metadata and derives scored/insufficient
-status from the submitted rating selections; it does not invent or adjust ratings.
-Unknown-dimension rationales explain partial status. Collective submissions are
-checked against the response schema before provenance admission, and correction
-errors retain the failing schema location. The model selects assessed values as
-rubric labels: absent, weak, material-issues, strong or convincing. The host maps
-that explicit selection to 0, 1, 2, 3 or 4 respectively; stored and query ratings
-remain numeric. A single `unknown` selection derives an unknown canonical state
-with no numeric value; collective-only `not-applicable` derives an inapplicable
-state. Individual tests do not use inapplicability to represent absent checks.
-The model cites short references to actually inspected source/checking sites;
-the host expands those references to retained coordinates before admission.
-Expectation-basis references identify contracts or source, not contributing
-checks; supported condition rows retain the test/check citations.
-Individual model calls use related source-byte-bounded batches of at most eight
-short tests, retaining valid independent entries when siblings fail. Configured
-semantic retrieval is prepared once for the pinned reports and supplies candidates,
-not automatic citations or proof of equivalence. Index/provider failure remains
-explicit without erasing independently supported deterministic evidence.
-Judgment conversations honor explicitly configured `maxSteps` and `contextBytes`
-limits. When omitted, Test Quality does not impose its own request-count,
-context-byte or output-token caps; provider limits and errors still apply.
-Repeated identical submission errors and evidence requests stop with an explicit
-error rather than continuing an inference loop.
+Up to four review agents independently investigate related package tests using
+assessment-pinned source, documentation and evidence tools. They record individual
+and collective group judgments through tool calls as they work; completed records
+are saved immediately. Group scope is retained separately from the independently
+judged project-wide synthesis. The host validates identity, scores and inspected
+source provenance, not the correctness of advisory interpretations.
+Agents can request typed, authorized diagnostics on demand. A provider failure
+stops the assessment with its actual error; tests without recorded judgments
+remain unreviewed. Assessment requests follow the job owner's cancellation rather
+than the interactive chat timeout. Conversations honor explicitly configured
+step and context limits; after saved progress, conversation compaction retains
+the recorded ledger and requires new source reads for subsequent citations.
+Consecutive identical evidence reads with unchanged results trigger a reminder;
+another unchanged repetition stops the stalled investigation with an explicit
+error, preserving completed judgments.
 Explicit live evaluation retains request, response, MCP-read and admission
 trajectories through `GO_REVIEW_QUALITY_TRACE_DIR`; ordinary assessments do not
 persist these full-context traces. It checks delivery of explained, evidence-
 backed advice within budgets, not exact scores, exhaustive gap maps or wording.
+`scripts/test-agent-capabilities.sh quality-live retained` runs a five-minute
+local-model check on a package with at most twelve declarations from a saved
+assessment. Set `GO_REVIEW_QUALITY_ARCHIVE`, `GO_REVIEW_QUALITY_ASSESSMENT`,
+`GO_REVIEW_QUALITY_PACKAGE` and `GO_REVIEW_QUALITY_TRACE_DIR`. It saves provider
+requests and an independent result archive, disables fresh execution, and checks
+that cited advice survives reload and is available through the result readers.
+`quality-live exercises` checks a small mixed-quality project, an explicitly
+requested targeted rerun, and cancellation after saved progress. The cases can
+also run separately as `quality-live mixed`, `quality-live diagnostic` and
+`quality-live cancel`. They use the configured local model and
+`GO_REVIEW_QUALITY_TRACE_DIR`; mixed and cancelled results include browser-reader
+exports. The layout replay script accepts an optional running-response export
+to check recorded intermediate progress without launching new inference.
 
 V3 archives use immutable content-addressed report/fact blobs and independently
 changed result/diagnostic records with atomic metadata checkpoints. Active queries
@@ -1005,12 +977,14 @@ preserve the chosen `assessmentID`. Operations:
 - `test`, `finding`: qualified `snapshotID` and `symbolID` (the retained test
   declaration ID, not a production symbol);
   `findingIndex` selects a finding.
-- Version 3 `suite` shows collective ratings; `expectations` pages behavior
+- Version 3 `suite` shows collective ratings; `suite-groups` pages recorded group
+  assessments. `expectations` pages behavior
   summaries, `expectation` and `conditions` use `expectationID`, and `condition`
   also uses `conditionID`. `suite-findings` pages retained collective findings.
 - Version 3 `diagnostics` pages summaries with `diagnosticIndex`.
   `diagnostic-runs` and `diagnostic-artifacts` use that index;
-  `diagnostic-attempts` also uses the selected `runIndex`. Failed attempts retain
+  `diagnostic-attempts` and `diagnostic-commands` also use the selected `runIndex`;
+  commands include their retained output. Failed attempts retain
   artifact hashes and source verification independently of passing/failing
   outcomes. These reads do not repeat the diagnostic.
 - `source`: qualified `snapshotID`, `fileID`, `startLine`/`endLine`.
@@ -1029,7 +1003,7 @@ current Application snapshot IDs. Chat refreshes the selected saved assessment,
 test or cited source every turn, and can propose validated navigation.
 These read-only tools cannot launch assessment, execute tests or mutate source.
 Provider/protocol/budget failures remain explicit, with completed work retained
-and affected tests marked insufficient. Use `tests` and `test` for the
+and affected tests left unreviewed. Use `tests` and `test` for the
 current test-level readers.
 
 ## Change Review

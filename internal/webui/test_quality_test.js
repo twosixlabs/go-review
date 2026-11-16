@@ -25,7 +25,7 @@ test('Test Quality launches explicitly, retains background context and drills in
     else if(url==='/api/test-quality/start'){if(delayStart)await startGate;exists=true;running=true;value={id:'assessment',status:'running'};}
     else if(url==='/api/test-quality/status')value={assessments:exists?[{id:'assessment',status:jobStatus||(running?'running':'completed'),summary}]:[]};
     else if(args.operation==='indicators')value={assessmentID:'assessment',modules:[{module:'app',snapshotID:'pinned',sourceSHA256:'ordinary',summary,packages:[{package:'app/service',summary:{score:50}}]}]};
-    else if(args.operation==='overview')value={assessmentID:'assessment',status:jobStatus||(running?'running':'completed'),version:'test-quality/3',model:'test',summary,categories:{'assertion-strength':75},limitations:['Statement coverage is not assertion quality.'],moduleCount:1};
+    else if(args.operation==='overview')value={assessmentID:'assessment',status:jobStatus||(running?'running':'completed'),activity:'Reviewing acceptance tests',version:'test-quality/3',model:'test',summary,categories:{'assertion-strength':75},limitations:['Statement coverage is not assertion quality.'],moduleCount:1};
     else if(args.operation==='modules')value={items:[{...identity,package:'app/service',summary,findings:1}],nextOffset:null,total:1};
     else if(args.operation==='tests')value={items:[{identity,name:'TestF',package:'app/service',status:'scored',summary,findingCount:1}],nextOffset:null,total:1};
     else if(args.operation==='test')value={identity,name:'TestF',package:'app/service',testKind:'test',declaration:{snapshotID:'pinned',fileID:'test',startLine:3,endLine:3},status:'scored',ratings:[{dimension:'assertion-strength',state:'assessed',value:3,rationale:'Checks outputs',evidence:[{snapshotID:'pinned',fileID:'test',startLine:3,endLine:3}]}],
@@ -98,11 +98,21 @@ test('Test Quality launches explicitly, retains background context and drills in
     enabled=true;
     const progress=dom.window.document.querySelector('#quality-progress-bar');
     assert.ok(progress,'running assessment has no progress indicator');
+    assert.match(dom.window.document.querySelector('#quality-overview').textContent,/Reviewing acceptance tests/,'live agent activity must be visible');
     assert.equal(progress.value,1);
     assert.equal(progress.max,3,'excluded functions must not inflate work remaining');
     assert.match(dom.window.document.querySelector('#quality-progress-label').textContent,/1 of 3 tests processed/);
     summary.counts.insufficient=1;summary.counts.unreviewed=1;
+    dom.window.document.querySelector('.quality-assessment-details').open=true;
     await vm.runInContext('qualityPoll()',ctx);
+    assert.equal(dom.window.document.querySelector('.quality-assessment-details').open,true,'polling must preserve expanded assessment details');
+    dom.window.document.querySelector('.quality-assessment-details').open=false;
+    await vm.runInContext('qualityPoll()',ctx);
+    assert.equal(dom.window.document.querySelector('.quality-assessment-details').open,false,'polling must preserve collapsed assessment details');
+    dom.window.document.querySelector('.quality-assessment-details').open=true;
+    await vm.runInContext("qualityState.id='another-assessment';qualityOverview()",ctx);
+    assert.equal(dom.window.document.querySelector('.quality-assessment-details').open,false,'another assessment must not inherit expanded details');
+    vm.runInContext("qualityState.id='assessment'",ctx);
     assert.equal(progress.value,2,'insufficient results are processed work, not scored results');
     jobStatus='queued';
     await vm.runInContext('qualityPoll()',ctx);
@@ -195,6 +205,7 @@ test('Test Quality pages collective and diagnostic detail without executing work
       expectations:[{id:'range',description:'Range contract',basis:'documented',state:'supported',conditionCount:2}],
       conditions:[{id:args.offset?'upper':'lower',description:args.offset?'Upper partition':'Lower partition',state:'gap',rationale:'Missing assertion',evidence:[citation]}],
       'suite-findings':[{title:'Suite finding',rationale:'Collective evidence',evidence:[citation]}],
+      'suite-groups':[{package:'app/service',scope:[{snapshotID:'pinned',module:'app',symbolID:'TestRange'}],ratings:[{dimension:'behavior-adequacy',value:3,rationale:'Complementary checks',evidence:[citation]}],findings:[{title:'Missing failure case',rationale:'Failure is not checked',evidence:[citation]}]}],
       diagnostics:[{diagnosticIndex:0,status:'partial',sourceVerified:true,request:{reason:'Repeat a reviewed test'},runCount:1,artifactCount:1}],
       'diagnostic-runs':[{runIndex:0,status:'partial',error:'One attempt failed',attemptCount:2}],
       'diagnostic-attempts':[{test:'app::TestRange',attempt:2,outcome:'fail'}],
@@ -225,6 +236,7 @@ test('Test Quality pages collective and diagnostic detail without executing work
       assert.ok(button,'missing detail control: '+text);await button.onclick();
     };
     await click('Inspect collective');
+    assert.match(dom.window.document.querySelector('#quality-overview').textContent,/app\/service.*Complementary checks.*Missing failure case/s,'group judgments must remain useful before project synthesis');
     await click('Range contract');
     assert.match(dom.window.document.querySelector('#quality-overview').textContent,/Group observation.*1 selected test.*other groups may contribute/);
     await vm.runInContext('qualityPoll()',ctx);

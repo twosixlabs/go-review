@@ -115,6 +115,7 @@ type Assessment struct {
 	Policy           DiagnosticPolicy   `json:"policy"`
 	DiagnosticReason string             `json:"diagnosticReason,omitempty"`
 	Phase            string             `json:"phase,omitempty"`
+	Activity         string             `json:"activity,omitempty"`
 	PhaseMillis      map[string]int64   `json:"phaseMillis,omitempty"`
 	Persistence      PersistenceMetrics `json:"persistence"`
 	SavedSummary     *Summary           `json:"summary,omitempty"`

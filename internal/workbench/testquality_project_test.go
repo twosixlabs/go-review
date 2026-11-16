@@ -3,7 +3,6 @@ package workbench
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -38,100 +37,56 @@ func TestQualityProjectAssessmentKeepsPartialMultiModuleJudgmentsAndAggregateCov
 		// This profile covers a run with multiple tests, not named-case paths.
 		UnitEvidence: &review.UnitEvidence{SourceSHA256: "worker-source", AllTests: true, Runs: []review.UnitTestRun{{Status: "pass", MatchedTests: []string{"TestPublish", "TestOther"}, Outcomes: map[string]string{"TestPublish": "pass", "TestOther": "pass"}}}}}
 	s.review.Modules = append(s.review.Modules, review.ReviewedModule{Report: worker})
+	exampleFinished := make(chan struct{})
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Messages []intelligence.Message `json:"messages"`
-			Tools    []intelligence.Tool    `json:"tools"`
-			Format   struct {
-				Type   string `json:"type"`
-				Schema struct {
-					Name string `json:"name"`
-				} `json:"json_schema"`
-			} `json:"response_format"`
+		request, scope, ok := qualityFixtureDecode(t, r)
+		if !ok || len(scope.Tests) == 0 {
+			http.Error(w, "invalid worker scope", http.StatusBadRequest)
+			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
+		qualityFixtureCheckTools(t, request)
+		var item testquality.Responsibility
+		for _, entry := range scope.Tests {
+			selected := scope.item(entry)
+			switch selected.Name {
+			case "TestF", "TestPublish":
+				item = selected
+			case "TestBroken":
+			default:
+				t.Errorf("production function became an assessment target: %s", selected.Name)
+			}
 		}
-		var initial struct {
-			Tests []struct {
-				Test   testquality.Responsibility `json:"test"`
-				Source json.RawMessage            `json:"source"`
-			} `json:"tests"`
+		if item.Name == "" {
+			http.Error(w, "missing expected test", http.StatusBadRequest)
+			return
 		}
-		if err := json.Unmarshal([]byte(request.Messages[1].Content), &initial); err != nil {
-			t.Error(err)
-		}
-		item := initial.Tests[0].Test
-		if item.Name != "TestF" && item.Name != "TestPublish" {
-			t.Error("production functions must not become assessment targets")
-		}
-		read, _ := json.Marshal(map[string]any{"snapshotID": item.Identity.SnapshotID, "fileID": "f", "startLine": 2, "endLine": 2})
-		name, args := "review_source", read
-		if request.Format.Type == "json_schema" || request.Messages[len(request.Messages)-1].Role == "tool" {
-			levels := []int{4, 2}
-			title, rationale, suggestion := "Meaningful result assertion", "The test checks the return value.", "Review relevant additional cases."
+		production := testquality.Citation{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
+		switch len(request.Messages) {
+		case 1:
+			qualityFixtureRespond(w, qualityFixtureRead(item.Declaration), qualityFixtureRead(production))
+		case 4:
+			craft, assertion := 2, 4
+			rationale := "The test checks the return value."
 			if item.Identity.Module == "worker" {
-				levels = []int{0, 1}
-				title = "Invocation without behavior assertion"
+				craft, assertion = 1, 0
 				rationale = "The mock is called and Publish's result is ignored; the empty input is not represented."
-				suggestion = "Assert accepted and empty-input outcomes."
-				if !strings.Contains(string(initial.Tests[0].Source), "mock") {
+				if !strings.Contains(request.Messages[2].Content, "mock") {
 					t.Error("mock/test source not investigated")
 				}
 			}
-			citations := []testquality.Citation{{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}, {SnapshotID: item.Identity.SnapshotID, FileID: "test", StartLine: 3, EndLine: 3}}
-			ratings := []testquality.Rating{}
-			for i, d := range []testquality.Dimension{testquality.AssertionStrength, testquality.Craftsmanship} {
-				ratings = append(ratings, testquality.Rating{Dimension: d, State: testquality.RatingAssessed, Value: &levels[i], Rationale: rationale, Evidence: citations})
-			}
-			item.Status, item.Ratings, item.Findings = testquality.StatusScored, ratings, []testquality.Finding{{Category: "assertion-strength", Kind: "inference", Title: title, Rationale: rationale, Consequence: "Coverage alone cannot establish meaningful checks.", Suggestion: suggestion, Evidence: citations}}
-			results := []testquality.Responsibility{item}
-			for _, selected := range initial.Tests[1:] {
-				partial := selected.Test
-				partial.Status, partial.Reason = testquality.StatusInsufficient, "fixture model failure: unresolved independent batch sibling"
-				partial.Ratings = []testquality.Rating{
-					{Dimension: testquality.Craftsmanship, State: testquality.RatingUnknown, Rationale: partial.Reason},
-					{Dimension: testquality.AssertionStrength, State: testquality.RatingUnknown, Rationale: partial.Reason},
+			qualityFixtureRespond(w, qualityFixtureTest(item, craft, assertion, rationale), qualityFixtureGroup(production, rationale))
+		default:
+			if item.Identity.Module == "worker" {
+				select {
+				case <-exampleFinished:
+					http.Error(w, "fixture model failure", http.StatusServiceUnavailable)
+				case <-r.Context().Done():
 				}
-				results = append(results, partial)
-			}
-			name = "submit_batch"
-			args, _ = json.Marshal(map[string]any{"items": results})
-		}
-		collective := request.Format.Schema.Name == "submit_suite"
-		for _, tool := range request.Tools {
-			collective = collective || tool.Function.Name == "submit_suite"
-		}
-		if collective {
-			name = "submit_suite"
-			unknownRatings := []any{}
-			for _, dimension := range []testquality.Dimension{testquality.BehaviorAdequacy, testquality.ConditionAdequacy} {
-				unknownRatings = append(unknownRatings, map[string]any{"dimension": dimension, "state": testquality.RatingUnknown, "rationale": "Partial fixture suite has unresolved test evidence.", "evidence": []testquality.Citation{}})
-			}
-			args, _ = json.Marshal(map[string]any{"ratings": unknownRatings, "expectations": []testquality.ExpectedBehavior{}, "findings": []testquality.Finding{}})
-		}
-		delta := map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "evidence", "function": map[string]string{"name": name, "arguments": string(args)}}}}
-		finish := "tool_calls"
-		if request.Format.Type == "json_schema" {
-			if collective {
-				var proposal map[string]any
-				if err := json.Unmarshal(args, &proposal); err != nil {
-					t.Error(err)
-				}
-				delete(proposal, "status")
-				delete(proposal, "reason")
-				args, _ = json.Marshal(proposal)
-			}
-			converted, err := qualityProposalLabels(args, request.Messages[len(request.Messages)-1].Content)
-			if err != nil {
-				t.Error(err)
 				return
 			}
-			args = converted
-			delta, finish = map[string]any{"content": string(args)}, "stop"
+			close(exampleFinished)
+			qualityFixtureRespond(w)
 		}
-		response, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": delta, "finish_reason": finish}}})
-		fmt.Fprintf(w, "data: %s\n\n", response)
 	}))
 	defer model.Close()
 	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: model.URL, Model: "project-fixture", MaxSteps: 3})
@@ -167,13 +122,22 @@ func TestQualityProjectAssessmentKeepsPartialMultiModuleJudgmentsAndAggregateCov
 		t.Fatal(err)
 	}
 	want := 25 * ((4+2)/2.0 + (0+1)/2.0) / 2
-	if a.Status != "partial" || summary.Counts.Scored != 2 || summary.Counts.Insufficient != 1 || summary.Score == nil || math.Abs(*summary.Score-want) > 1e-8 {
+	if a.Status != "failed" || summary.Counts.Scored != 2 || summary.Counts.Unreviewed != 1 || summary.Score == nil || math.Abs(*summary.Score-want) > 1e-8 {
 		t.Fatalf("project result: %+v %+v", qualityCompact(a), summary)
 	}
-	if !strings.Contains(a.Items[2].Reason, "fixture model failure") {
-		t.Fatalf("provider failure hidden: %+v", a.Items[2])
+	var workerSnapshot string
+	for _, item := range a.Items {
+		if item.Name == "TestBroken" && item.Status != testquality.StatusUnreviewed {
+			t.Fatalf("unfinished test was graded after provider failure: %+v", item)
+		}
+		if item.Name == "TestPublish" {
+			workerSnapshot = item.Identity.SnapshotID
+		}
 	}
-	archive, err := s.queryTestQuality(context.Background(), testquality.QueryInput{AssessmentID: a.ID, Operation: "source", SnapshotID: a.Items[1].Identity.SnapshotID, FileID: "test", StartLine: 3, EndLine: 3})
+	if !strings.Contains(a.Error, "503") || a.Suite == nil || len(a.Suite.Groups) != 2 {
+		t.Fatalf("provider failure or completed group judgments lost: error=%s suite=%+v", a.Error, a.Suite)
+	}
+	archive, err := s.queryTestQuality(context.Background(), testquality.QueryInput{AssessmentID: a.ID, Operation: "source", SnapshotID: workerSnapshot, FileID: "test", StartLine: 3, EndLine: 3})
 	if err != nil || !strings.Contains(string(archive), "mock") {
 		t.Fatalf("saved evidence unavailable: %s %v", archive, err)
 	}

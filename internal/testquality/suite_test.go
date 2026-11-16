@@ -16,6 +16,22 @@ import (
 	"github.com/russellbrasser/go-review/internal/webui"
 )
 
+func TestQualitySuiteProviderFailureStopsGroupRequests(t *testing.T) {
+	a := largeFactsAssessment()
+	a.Version = EvidenceRubricVersion
+	var requests atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+	}))
+	defer provider.Close()
+	_, err := AssessSuite(t.Context(), a, intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture"})
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || requests.Load() != 1 {
+		t.Fatalf("collective provider failure was hidden or repeated: requests=%d error=%v", requests.Load(), err)
+	}
+}
+
 func TestQualitySuiteContextDoesNotTreatIndividualJudgmentsAsEvidence(t *testing.T) {
 	a := factsAssessment("package example;import \"testing\"\nfunc TestF(t *testing.T) {}\n")
 	a.Items[0].Status = StatusScored

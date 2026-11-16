@@ -42,6 +42,15 @@ type SuiteAssessment struct {
 	Findings     []Finding          `json:"findings,omitempty"`
 	Reason       string             `json:"reason,omitempty"`
 	Scope        []Identity         `json:"scope,omitempty"`
+	Groups       []GroupAssessment  `json:"groups,omitempty"`
+}
+
+type GroupAssessment struct {
+	SnapshotID string     `json:"snapshotID"`
+	Package    string     `json:"package"`
+	Scope      []Identity `json:"scope"`
+	Ratings    []Rating   `json:"ratings"`
+	Findings   []Finding  `json:"findings,omitempty"`
 }
 
 // A behavior's contributors are also established by its individually validated
@@ -295,6 +304,11 @@ func AssessSuite(ctx context.Context, a *Assessment, cfg intelligence.Config, en
 			return retained, ctx.Err()
 		}
 		if err != nil {
+			var providerErr *ProviderError
+			if errors.As(err, &providerErr) {
+				retained.Reason = err.Error()
+				return retained, err
+			}
 			groupErrors = errors.Join(groupErrors, fmt.Errorf("collective group %d: %w", i+1, err))
 			result = SuiteAssessment{Status: StatusInsufficient, Reason: err.Error()}
 		} else {

@@ -35,6 +35,20 @@ type DiagnosticRecord struct {
 	Artifacts      []Artifact           `json:"artifacts,omitempty"`
 }
 
+type diagnosticSummary struct {
+	DiagnosticIndex int               `json:"diagnosticIndex"`
+	Request         DiagnosticRequest `json:"request"`
+	Status          string            `json:"status"`
+	Error           string            `json:"error"`
+	SourceVerified  bool              `json:"sourceVerified"`
+	RunCount        int               `json:"runCount"`
+	ArtifactCount   int               `json:"artifactCount"`
+}
+
+func summarizeDiagnostic(index int, record DiagnosticRecord) diagnosticSummary {
+	return diagnosticSummary{index, record.Request, record.Status, record.Error, record.SourceVerified, len(record.Runs), len(record.Artifacts)}
+}
+
 func DefaultDiagnosticPolicy(allow bool) DiagnosticPolicy {
 	return DiagnosticPolicy{AllowExecution: allow, MaxCommands: 8, MaxRepetitions: 3}
 }
@@ -192,7 +206,7 @@ func PlanDiagnostics(a *Assessment, policy DiagnosticPolicy) ([]DiagnosticReques
 				newCost = request.Repetitions
 			}
 			if cost+newCost > policy.MaxCommands {
-				return requests, "Diagnostic budget exhausted; remaining risks are unresolved.", nil
+				return requests, fmt.Sprintf("Fresh diagnostic plan limited to %d commands; additional candidate tests were not selected.", policy.MaxCommands), nil
 			}
 			if err := ValidateDiagnostics(a, policy, append(requests, request)); err != nil {
 				return nil, "", err

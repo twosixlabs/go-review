@@ -148,6 +148,7 @@ async function qualityOverview() {
   qualityRenderProgress(data.status,data.summary,data.phase);
   const parent=qualityEl('quality-overview');
   const expanded=parent.dataset.assessment===id?[...parent.children].filter(child=>child.tagName==='SECTION'):[];
+  const detailsOpen=parent.dataset.assessment===id&&!!parent.querySelector('.quality-assessment-details')?.open;
   parent.replaceChildren();parent.dataset.assessment=id;
   const metrics=el('div',undefined,parent,'quality-metrics');
   const gauge=(label,value)=>{
@@ -165,7 +166,9 @@ async function qualityOverview() {
   };
   gauge('Individual tests',data.summary?.score);
   for(const [name,value] of Object.entries(data.categories||{}))gauge(name.replaceAll('-',' '),value);
+  if(data.activity)el('p',data.activity,parent,'quality-activity');
   const details=el('details',undefined,parent,'quality-assessment-details');
+  details.open=detailsOpen;
   el('summary','Assessment details',details);
   el('p',`${data.analysis?.parsedSources||0} sources · ${data.analysis?.helpersAnalyzed||0} helpers · ${data.review?.requests||0} model requests`,details);
   if(data.diagnosticReason)el('p',data.diagnosticReason,details);
@@ -173,6 +176,18 @@ async function qualityOverview() {
     const target=el('section',undefined,parent),suite=await qualityQuery('suite');
     if(id!==qualityState.id)return;
     el('h3','Collective suite judgment · '+suite.status,target);if(suite.reason)el('p',suite.reason,target);
+    await qualityPage('suite-groups',{},target,group=>{
+      const section=el('section',undefined,target);el('h4',group.package,section);
+      for(const rating of group.ratings||[]){
+        el('p',`${rating.dimension} · ${rating.value}/4 · ${rating.rationale}`,section);
+        qualityCitations(section,rating.evidence);
+      }
+      for(const finding of group.findings||[]){
+        el('h5',finding.title,section);el('p',finding.rationale,section);
+        if(finding.suggestion)el('p',finding.suggestion,section);
+        qualityCitations(section,finding.evidence);
+      }
+    });
     await qualityPage('expectations',{},target,e=>{
       button(e.description+' · '+e.state,()=>qualityAct(async()=>{
         const detail=await qualityQuery('expectation',{expectationID:e.id});

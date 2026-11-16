@@ -528,16 +528,17 @@ tests are considered together rather than each being required to cover the suite
 This is advisory guidance for human review, not certification: inspect the cited
 evidence and decide. Debatable scores or gap opinions do not trigger forced
 rescoring; provenance, execution permissions and resource limits remain enforced.
-Large scopes use bounded related-test groups, with their completed observations
-saved as review progresses. The overall suite ratings are a separate judgment
-over those groups and their cited sources, not an average of group ratings.
-Deterministic checking sites, literal cases, helper bindings and retained outcomes
-are collected first; they are evidence, not automatically generated quality scores.
+Review agents investigate related tests using the retained evidence tools, with
+up to four groups reviewed concurrently. Completed observations are saved as
+review progresses. Overall suite ratings are a separate judgment, not an average
+of group or individual ratings. Deterministic checking sites, literal cases,
+helper bindings and retained outcomes are available as evidence, not automatic scores.
 Production source, control/data flow and recorded coverage provide
 supporting context; production functions are **not** assessment targets.
 An external provider requires
 explicit approval to send this evidence. **Allow system-selected fresh test
-diagnostics** defaults on; uncheck it to use retained evidence only. Fresh
+diagnostics** defaults on; uncheck it to use retained evidence only. Agents can
+request targeted diagnostics when useful. Fresh
 diagnostics are bounded to eight commands and three repetitions and require
 source-verified membership in the previously evaluated suite. They never broaden
 to unreviewed tests, benchmarks, mutation or fuzz campaigns. Original retained

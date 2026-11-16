@@ -11,7 +11,8 @@ Use operation assessments to discover IDs for the current project; overview show
 assessment scope, modules lists package groups, tests lists qualified tests.
 Read test for rating rationale and findings, then source or evidence for tests,
 helpers, assertions, coverage, CFG or data flow. Missing evidence is unknown, not zero.
-Version 3: suite shows collective ratings; expectations lists behaviors, expectation
+Version 3: suite shows collective ratings; suite-groups pages agent group assessments;
+expectations lists behaviors, expectation
 and conditions use expectationID, condition also uses conditionID. suite-findings
 pages collective findings. diagnostics lists records; diagnostic-runs and
 diagnostic-artifacts use diagnosticIndex, diagnostic-attempts also uses runIndex.

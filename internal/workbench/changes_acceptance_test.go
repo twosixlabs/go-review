@@ -12,6 +12,7 @@ import (
 
 	"github.com/russellbrasser/go-review/internal/changes"
 	"github.com/russellbrasser/go-review/internal/review"
+	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
 func TestChangeInteractiveAcceptance(t *testing.T) {
@@ -66,6 +67,7 @@ func TestChangeInteractiveAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(report)
+	s.qualityStore = testquality.Store{Directory: t.TempDir()}
 	s.comparison = c
 	flow := c.Flows[0]
 	logical, err := s.queryChanges(context.Background(), changeQueryInput{ComparisonID: c.ID, Operation: "side", ModuleID: c.Modules[0].ID, Side: "after", SnapshotID: c.Modules[0].After.SnapshotID, View: "logical", SymbolID: flow.After.SymbolID})

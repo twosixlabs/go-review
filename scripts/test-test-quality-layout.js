@@ -1,19 +1,21 @@
 // Browser regression: run in a loaded Go Review page with its production assets.
 // Checks Test Quality from package, diagram, and reader workspace layouts.
-// CLI: node scripts/test-test-quality-layout.js LIVE_BROWSER_DATA OUTPUT_HTML.
+// CLI: node scripts/test-test-quality-layout.js LIVE_BROWSER_DATA OUTPUT_HTML [RUNNING_DATA].
 // Builds an offline browser fixture from production assets and actual archived
 // reader responses. It never starts a server, inference or target execution.
 if (typeof window === 'undefined') {
   const fs = require('node:fs'), path = require('node:path');
-  const [input, output] = process.argv.slice(2);
+  const [input, output, runningInput] = process.argv.slice(2);
   if (!input || !output) throw Error('LIVE_BROWSER_DATA and OUTPUT_HTML are required');
   const root = path.join(__dirname, '../internal/webui');
   const data = JSON.parse(fs.readFileSync(input, 'utf8'));
-  if (!data.overview?.assessmentID || !data.suite?.ratings?.length)
-    throw Error('Actual archived overview and collective results are required');
+  if (!data.overview?.assessmentID || !Array.isArray(data.tests?.items))
+    throw Error('Actual archived overview and test results are required');
+  if (runningInput) data.running = JSON.parse(fs.readFileSync(runningInput, 'utf8'));
   const escapeScript = text => text.replace(/<\/script/gi, '<\\/script');
   const replay = `const recorded=${escapeScript(JSON.stringify(data))};
 window.qualityRecordedRequests=[];
+window.qualityReplayPhase='completed';
 window.fetch=async function(input,options={}) {
  const url=new URL(String(input),'http://recorded.invalid');
  const args=options.body?JSON.parse(options.body):{};
@@ -25,7 +27,8 @@ window.fetch=async function(input,options={}) {
  else if(url.pathname==='/api/review')return {ok:true,json:async()=>({running:false,run:null})};
  else if(url.pathname==='/api/test-quality/query')key=args.operation==='test'?'test-'+args.symbolID:args.operation==='source'?'source-'+args.fileID:['expectation','conditions'].includes(args.operation)?args.operation+'-'+args.expectationID:args.operation;
  if(!key||!(key in recorded))return {ok:false,json:async()=>({error:'Read-only recorded fixture has no endpoint: '+url.pathname+' '+(args.operation||'')})};
- return {ok:true,json:async()=>recorded[key]};
+ const response=window.qualityReplayPhase==='running'&&recorded.running&&key in recorded.running?recorded.running[key]:recorded[key];
+ return {ok:true,json:async()=>response};
 };`;
   let html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   html = html.replace(/<link rel="stylesheet" href="\/([^"]+)">/g,

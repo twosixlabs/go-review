@@ -14,9 +14,6 @@ import (
 
 func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment, retrieve testquality.RetrievalFunc) (testquality.JudgmentOptions, func(), error) {
 	options := testquality.JudgmentOptions{Retrieve: retrieve}
-	if _, err := testquality.AnalyzeFacts(a); err != nil {
-		return options, nil, err
-	}
 	service := &reviewMCP{work: s, pinned: map[string]*querySnapshot{}}
 	hasEvidence, hasDataflow, hasPackages := false, false, false
 	for _, report := range a.Reports {
@@ -27,18 +24,59 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 	}
 	st, ct := mcp.NewInMemoryTransports()
 	server := service.server()
+	type pinnedOverviewInput struct {
+		snapshotInput
+		overviewInput
+	}
+	registerReviewTool(server, service, "review_overview", "Read project purpose, module metrics and entry inventory from an assessment-pinned snapshot. Use snapshotID from the assigned scope.", "overview",
+		func(input pinnedOverviewInput) (string, string) { return input.SnapshotID, "" })
 	type factsInput struct {
 		SnapshotID string `json:"snapshotID" jsonschema:"Assessment-pinned snapshot ID"`
 		SymbolID   string `json:"symbolID,omitempty" jsonschema:"Selected TEST declaration ID; omit to page all selected tests"`
 		Offset     int    `json:"offset,omitempty"`
 		Limit      int    `json:"limit,omitempty"`
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "quality_facts", Description: "Read deterministic checking sites, helper limitations and input/predicate facts for selected TEST IDs. Initial facts are already supplied. No execution; production function metrics use review_evidence.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+	mcp.AddTool(server, &mcp.Tool{Name: "quality_facts", Description: "Compute and read deterministic checking sites, helper limitations and input/predicate facts for selected TEST IDs. No execution; production function metrics use review_evidence.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input factsInput) (*mcp.CallToolResult, map[string]any, error) {
 			if service.pinned[input.SnapshotID] == nil {
 				return nil, nil, fmt.Errorf("unknown assessment-pinned snapshot")
 			}
+			if _, err := testquality.AnalyzeFacts(a); err != nil {
+				return nil, nil, err
+			}
 			data, err := testquality.Query(ctx, a, testquality.QueryInput{AssessmentID: a.ID, Operation: "facts", SnapshotID: input.SnapshotID, SymbolID: input.SymbolID, Offset: input.Offset, Limit: input.Limit})
+			if err != nil {
+				return nil, nil, err
+			}
+			var output map[string]any
+			if err := json.Unmarshal(data, &output); err != nil {
+				return nil, nil, err
+			}
+			return nil, output, nil
+		})
+	type diagnosticInput struct {
+		SnapshotID      string `json:"snapshotID" jsonschema:"Assessment-pinned snapshot ID"`
+		Operation       string `json:"operation" jsonschema:"diagnostics, diagnostic-runs, diagnostic-attempts, diagnostic-commands, or diagnostic-artifacts"`
+		DiagnosticIndex int    `json:"diagnosticIndex,omitempty"`
+		RunIndex        int    `json:"runIndex,omitempty"`
+		Offset          int    `json:"offset,omitempty"`
+		Limit           int    `json:"limit,omitempty"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "quality_diagnostics", Description: "Read retained fresh diagnostic observations. Page runs, attempts, commands (including output), or artifacts by diagnosticIndex/runIndex. Never executes tests.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input diagnosticInput) (*mcp.CallToolResult, map[string]any, error) {
+			if service.pinned[input.SnapshotID] == nil {
+				return nil, nil, fmt.Errorf("unknown assessment-pinned snapshot")
+			}
+			switch input.Operation {
+			case "diagnostics", "diagnostic-runs", "diagnostic-attempts", "diagnostic-commands", "diagnostic-artifacts":
+			default:
+				return nil, nil, fmt.Errorf("unsupported diagnostic operation %q", input.Operation)
+			}
+			data, err := testquality.Query(ctx, a, testquality.QueryInput{
+				AssessmentID: a.ID, Operation: input.Operation, DiagnosticIndex: input.DiagnosticIndex,
+				RunIndex: input.RunIndex, Offset: input.Offset, Limit: input.Limit,
+			})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -93,7 +131,7 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 	allowed := map[string]bool{}
 	for _, tool := range inventory.Tools {
 		switch tool.Name {
-		case "review_source", "review_search", "review_document", "review_evidence", "review_packages", "review_dataflow", "quality_retrieve", "quality_facts":
+		case "review_overview", "review_source", "review_search", "review_document", "review_evidence", "review_packages", "review_flow", "review_dataflow", "quality_retrieve", "quality_facts", "quality_diagnostics":
 		default:
 			continue
 		}
