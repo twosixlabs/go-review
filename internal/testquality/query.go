@@ -95,6 +95,53 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		items = append(items, item)
 	}
 	switch input.Operation {
+	case "indicators":
+		type packageIndicator struct {
+			Package string  `json:"package"`
+			Summary Summary `json:"summary"`
+		}
+		type moduleIndicator struct {
+			Module       string             `json:"module"`
+			SnapshotID   string             `json:"snapshotID"`
+			SourceSHA256 string             `json:"sourceSHA256"`
+			Summary      Summary            `json:"summary"`
+			Packages     []packageIndicator `json:"packages"`
+		}
+		modules := []moduleIndicator{}
+		for _, pinned := range a.Reports {
+			if pinned.Report == nil {
+				return nil, fmt.Errorf("missing pinned report")
+			}
+			moduleItems := []Responsibility{}
+			packages := map[string][]Responsibility{}
+			for _, item := range a.Items {
+				if item.Identity.SnapshotID == pinned.SnapshotID {
+					moduleItems = append(moduleItems, item)
+					packages[item.Package] = append(packages[item.Package], item)
+				}
+			}
+			summary, err := AggregateVersion(a.Version, moduleItems)
+			if err != nil {
+				return nil, err
+			}
+			summary.Partial = summary.Partial || a.Status != "completed"
+			module := moduleIndicator{Module: pinned.Report.Module, SnapshotID: pinned.SnapshotID, SourceSHA256: pinned.Report.SourceSHA256, Summary: summary, Packages: []packageIndicator{}}
+			paths := make([]string, 0, len(packages))
+			for path := range packages {
+				paths = append(paths, path)
+			}
+			sort.Strings(paths)
+			for _, path := range paths {
+				value, err := AggregateVersion(a.Version, packages[path])
+				if err != nil {
+					return nil, err
+				}
+				value.Partial = value.Partial || a.Status != "completed"
+				module.Packages = append(module.Packages, packageIndicator{Package: path, Summary: value})
+			}
+			modules = append(modules, module)
+		}
+		return json.Marshal(map[string]any{"assessmentID": a.ID, "modules": modules})
 	case "suite":
 		if a.Suite == nil {
 			return json.Marshal(SuiteAssessment{Status: StatusUnreviewed, Reason: "Collective judgment has not been performed."})
@@ -180,7 +227,7 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		}
 		return page(selected, input)
 	case "overview":
-		operations := []string{"modules", "unavailable", "findings", "tests", "test", "finding", "source", "evidence"}
+		operations := []string{"indicators", "modules", "unavailable", "findings", "tests", "test", "finding", "source", "evidence"}
 		operations = append(operations, "facts", "suite", "expectations", "expectation", "conditions", "condition", "suite-findings", "diagnostics", "diagnostic-runs", "diagnostic-attempts", "diagnostic-artifacts")
 		summary, err := AggregateVersion(a.Version, a.Items)
 		if err != nil {
@@ -221,7 +268,7 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 			"status": a.Status, "error": a.Error, "createdAt": a.CreatedAt, "updatedAt": a.UpdatedAt, "provider": a.Provider, "model": a.Model,
 			"summary": summary, "unit": "test", "categories": categories, "moduleCount": len(a.Reports), "unavailableModuleCount": len(a.Unavailable),
 			"phase": a.Phase, "phaseMillis": a.PhaseMillis, "policy": a.Policy, "diagnosticReason": a.DiagnosticReason, "analysis": a.Analysis, "review": a.Review, "persistence": a.Persistence,
-			"limitations": []string{"AI judgments, not measured facts. Production coverage is supporting context, not test quality.", "Scores equally weight assessed entries. Insufficient and unreviewed entries are unknown, not zero.", "Table cases and subtests belong to their enclosing test.", "Aggregate coverage does not identify which individual test or case executed a production path."},
+			"limitations": []string{"Scores equally weight tests with supported individual ratings. Unassessed dimensions do not count as zero.", "Table cases and subtests belong to their enclosing test."},
 			"operations":  operations})
 	case "findings":
 		type row struct {

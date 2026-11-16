@@ -1,6 +1,51 @@
 'use strict';
 const qualityState={active:false,id:null,overview:null,selected:null,group:null,source:null,serial:0,timer:null};
 const qualityEl=id=>document.getElementById(id);
+function qualityIndicator(context={}) {
+  if(qualityState.indicators?.assessmentID!==qualityState.latest?.id)return {value:null};
+  const module=qualityState.indicators?.modules?.find(m=>m.module===report.module&&m.sourceSHA256&&m.sourceSHA256===report.sourceSHA256);
+  if(!module||context.symbolID||context.location)return {value:null};
+  const summary=context.package?module.packages?.find(p=>p.package===context.package)?.summary:module.summary;
+  return {value:summary?.score??null,partial:!!summary?.partial};
+}
+async function qualityOpenScope(context={}) {
+  const module=qualityState.indicators?.assessmentID===qualityState.latest?.id?
+    qualityState.indicators?.modules?.find(m=>m.module===report.module&&m.sourceSHA256&&m.sourceSHA256===report.sourceSHA256):null;
+  const path=context.package||sym(context.symbolID)?.package;
+  qualityState.id=qualityState.latest?.id||null;
+  qualityState.group=null;qualityState.selected=null;qualityState.source=null;
+  qualityEl('quality-search').value='';qualityEl('quality-filter').value='';
+  if(module&&qualityState.indicators.assessmentID) {
+    qualityState.group=path?{snapshotID:module.snapshotID,module:module.module,package:path}:null;
+  }
+  await qualityOpen();
+}
+async function qualityRefreshIndicators(assessment) {
+  const key=assessment&&`${assessment.id}:${assessment.status||''}`;
+  if(!key){qualityState.indicators=null;qualityState.indicatorKey=null;qualityUpdateGauges();return;}
+  if(qualityState.indicatorKey===key)return;
+  if(qualityState.indicatorPending?.key===key)return qualityState.indicatorPending.promise;
+  const promise=(async()=>{
+    const data=await qualityRequest('/api/test-quality/query',{assessmentID:assessment.id,operation:'indicators'});
+    if(qualityState.latest?.id!==assessment.id||qualityState.latest?.status!==assessment.status)return;
+    qualityState.indicators=data;qualityState.indicatorKey=key;
+    qualityUpdateGauges();
+  })();
+  qualityState.indicatorPending={key,promise};
+  try {await promise;} finally {if(qualityState.indicatorPending?.promise===promise)qualityState.indicatorPending=null;}
+}
+function qualityUpdateGauges() {
+  if(!report)return;
+  for(const parent of document.querySelectorAll('[data-quality-summary]')) {
+    const {context,interactive,includeMetrics}=JSON.parse(parent.dataset.qualitySummary);
+    signalSummary(parent,context,interactive,includeMetrics);
+  }
+  for(const group of document.querySelectorAll('[data-quality-node]')) {
+    const {context,x,y}=JSON.parse(group.dataset.qualityNode);
+    nodeSignalIndicators(group,context,x,y);
+  }
+  qualityApplicationScore(false);
+}
 function qualityNotice(text,error=false) {
   qualityEl('quality-notice').textContent=text;qualityEl('quality-notice').classList.toggle('error',error);
 }
@@ -14,7 +59,7 @@ async function qualityRequest(path,body,signal) {
 function qualityQuery(operation,args={}) {
   return qualityRequest('/api/test-quality/query',{assessmentID:qualityState.id,operation,...args});
 }
-const qualityScore=value=>value===null||value===undefined?'Unknown':value.toFixed(1)+' / 100';
+const qualityScore=value=>value===null||value===undefined?'Not assessed':value.toFixed(1)+' / 100';
 function qualityCounts(summary) {
   const c=summary?.counts||{};
   return `${c.scored||0} scored · ${c.insufficient||0} insufficient · ${c.unreviewed||0} unreviewed · ${c.excluded||0} excluded`;
@@ -24,7 +69,7 @@ function qualityRenderProgress(status,summary,phase) {
   parent.hidden=!status;
   const active=['running','queued'].includes(status);
   parent.setAttribute('aria-busy',String(active));
-  const c=summary?.counts,processed=c?c.scored+c.insufficient:0,total=c?processed+c.unreviewed:0;
+  const c=summary?.counts,processed=c?(c.scored||0)+(c.insufficient||0):0,total=c?processed+(c.unreviewed||0):0;
   const noun='tests';
   if(active&&phase&&phase!=='individual-judgments') {
     bar.hidden=false;bar.removeAttribute('value');bar.removeAttribute('max');
@@ -63,9 +108,9 @@ async function qualityOpen() {
     qualityEl('quality-provider').textContent=config.enabled?
       `${config.external?'External':'Local'} provider: ${config.model} · ${config.baseURL}`:'AI disabled. Starting retains deterministic facts and authorized diagnostic observations; semantic judgments remain unknown.';
     qualityState.external=!!config.external;
-    qualityEl('quality-external').hidden=!config.external;qualityEl('quality-start').disabled=false;
+    qualityEl('quality-external').hidden=!config.external;qualityEl('quality-start').disabled=!!qualityState.starting;
     await qualityPoll();
-    if(qualityState.id){await qualityOverview();await qualityPackages();}
+    if(qualityState.id){await qualityPackages();if(!qualityState.selected&&!qualityState.source)await qualityFunctions();}
     else qualityNotice('No saved assessment for this project. Start explicitly to review retained evidence.');
   });
 }
@@ -76,6 +121,7 @@ async function qualityPoll() {
   const response=await qualityRequest('/api/test-quality/status');
   const list=response.assessments||[],select=qualityEl('quality-assessments');
   qualityState.latest=list[0]||null;qualityState.loadedReport=report;qualityApplicationScore(false);
+  qualityRefreshIndicators(qualityState.latest).catch(error=>qualityNotice(error.message,true));
   select.replaceChildren();
   for(const a of list) {
     const option=el('option',`${a.createdAt||a.id} · ${a.status} · ${a.model||''}`,select);
@@ -100,15 +146,29 @@ async function qualityOverview() {
   if(id!==qualityState.id)return;
   qualityState.overview=data;
   qualityRenderProgress(data.status,data.summary,data.phase);
-  const parent=qualityEl('quality-overview');parent.replaceChildren();
-  const score=el('div',undefined,parent,'quality-score');el('span','Individual test rating average (not suite adequacy)',score);el('strong',qualityScore(data.summary?.score),score);
-  el('span',data.summary?.partial?'Partial scope':'Assessed scope',score);
-  if(data.summary?.score===null)el('p','Unavailable: no tests have supported ratings.',score);
-  for(const [name,value] of Object.entries(data.categories||{})) {
-    const card=el('div',undefined,parent,'quality-score');el('span',name.replaceAll('-',' '),card);el('strong',qualityScore(value),card);
-  }
-  el('p',`${data.analysis?.parsedSources||0} retained sources parsed once · ${data.analysis?.helpersAnalyzed||0} shared helpers analyzed · ${data.review?.requests||0} model requests · ${data.review?.inputBytes||0} input bytes`,parent);
-  el('p',data.diagnosticReason||'Diagnostic planning has not completed.',parent);
+  const parent=qualityEl('quality-overview');
+  const expanded=parent.dataset.assessment===id?[...parent.children].filter(child=>child.tagName==='SECTION'):[];
+  parent.replaceChildren();parent.dataset.assessment=id;
+  const metrics=el('div',undefined,parent,'quality-metrics');
+  const gauge=(label,value)=>{
+    const meter=el('div',undefined,metrics,'metric-gauge');
+    const options=GoReviewGraph.gaugeOptions('coverage',value??null);
+    meter.style.setProperty('--metric-color',options.gaugeColor);
+    meter.setAttribute('role','meter');meter.setAttribute('aria-label',label);
+    meter.setAttribute('aria-valuetext',qualityScore(value));
+    if(value!==null&&value!==undefined){meter.setAttribute('aria-valuemin','0');meter.setAttribute('aria-valuemax','100');meter.setAttribute('aria-valuenow',value);}
+    const dial=svg('svg',{viewBox:'-28 -28 56 34',class:'metric-dial','aria-hidden':'true'},meter);
+    drawDial(dial,'signal',{value:value??null},options);
+    const caption=el('span',undefined,meter,'metric-caption');
+    el('strong',value===null||value===undefined?'Not assessed':value.toFixed(1),caption);
+    el('span',label,caption,'metric-label');
+  };
+  gauge('Individual tests',data.summary?.score);
+  for(const [name,value] of Object.entries(data.categories||{}))gauge(name.replaceAll('-',' '),value);
+  const details=el('details',undefined,parent,'quality-assessment-details');
+  el('summary','Assessment details',details);
+  el('p',`${data.analysis?.parsedSources||0} sources · ${data.analysis?.helpersAnalyzed||0} helpers · ${data.review?.requests||0} model requests`,details);
+  if(data.diagnosticReason)el('p',data.diagnosticReason,details);
   button('Inspect collective behaviors and conditions',()=>qualityAct(async()=>{
     const target=el('section',undefined,parent),suite=await qualityQuery('suite');
     if(id!==qualityState.id)return;
@@ -146,10 +206,11 @@ async function qualityOverview() {
       button('Inspect diagnostic artifacts',()=>qualityAct(()=>qualityPage('diagnostic-artifacts',args,section,artifact=>el('pre',JSON.stringify(artifact,null,2),section))),section);
     });
   }),parent);
+  parent.append(...expanded);
   qualityEl('quality-progress').textContent=`${data.status} · ${qualityCounts(data.summary)} · ${data.moduleCount||0} modules · ${data.unavailableModuleCount||0} unavailable`;
   const limits=qualityEl('quality-limitations');limits.replaceChildren();
   el('p',`${data.version} · ${data.model} · ${data.root||''} · assessment ${data.assessmentID}`,limits);
-  el('p',`Pinned evidence from ${data.createdAt||'this saved assessment'}. It may differ from the currently open source; results never substitute live files.`,limits);
+  el('p',`Evidence pinned ${data.createdAt||'with this assessment'}.`,limits);
   for(const line of data.limitations||[])el('p',line,limits);
   if(data.unavailableModuleCount)button('Read unavailable modules',()=>qualityAct(async()=>{
     const target=el('div',undefined,limits);await qualityPage('unavailable',{},target,(text)=>el('p',text,target));
@@ -180,7 +241,9 @@ async function qualityPackages() {
 async function qualityFunctions() {
   qualityState.serial++;
   const parent=qualityEl('quality-functions');parent.replaceChildren();
+  qualityEl('quality-list-heading').textContent=qualityState.group?.package?'Tests · '+qualityState.group.package:'Project tests';
   qualityState.selected=null;qualityState.source=null;qualityEl('quality-detail').replaceChildren();qualityEl('quality-source').replaceChildren();
+  el('p','Select a test to review its assessment and evidence.',qualityEl('quality-detail'),'muted');
   await qualityPage('tests',{...qualityState.group,query:qualityEl('quality-search').value,status:qualityEl('quality-filter').value},parent,item=>{
     button(`${item.name} · ${item.status} · ${qualityScore(item.summary.score)} · ${item.findingCount} findings`,
       ()=>qualityAct(()=>qualityResponsibility(item.identity)),parent);
@@ -303,11 +366,18 @@ qualityEl('test-quality').onclick=qualityOpen;
 qualityEl('quality-return').onclick=qualityClose;
 qualityEl('quality-start').onclick=()=>qualityAct(async()=>{
   if(qualityState.external&&!qualityEl('quality-consent').checked)throw Error('Approve the external-provider disclosure before starting.');
-  const a=await qualityRequest('/api/test-quality/start',{confirmExternal:qualityState.external&&qualityEl('quality-consent').checked,allowExecution:qualityEl('quality-execute').checked});
-  qualityState.id=a.id;qualityState.selected=null;qualityState.source=null;qualityState.group=null;qualityState.serial++;
-  qualityEl('quality-consent').checked=false;qualityEl('quality-detail').replaceChildren();qualityEl('quality-source').replaceChildren();
-  qualityNotice('Assessment started in the background. Continue browsing or chatting; only Cancel stops it.');
-  await qualityPoll();await qualityPackages();await qualityFunctions();
+  if(qualityState.starting)return;
+  qualityState.starting=true;qualityEl('quality-start').disabled=true;
+  qualityNotice('Starting assessment…');
+  try {
+    const a=await qualityRequest('/api/test-quality/start',{confirmExternal:qualityState.external&&qualityEl('quality-consent').checked,allowExecution:qualityEl('quality-execute').checked});
+    qualityState.id=a.id;qualityState.selected=null;qualityState.source=null;qualityState.group=null;qualityState.serial++;
+    qualityEl('quality-consent').checked=false;qualityEl('quality-detail').replaceChildren();qualityEl('quality-source').replaceChildren();
+    qualityNotice('Assessment started in the background. Continue browsing or chatting; only Cancel stops it.');
+    await qualityPoll();await qualityPackages();await qualityFunctions();
+  } finally {
+    qualityState.starting=false;qualityEl('quality-start').disabled=false;
+  }
 });
 qualityEl('quality-cancel').onclick=()=>qualityAct(async()=>{await qualityRequest('/api/test-quality/cancel',{assessmentID:qualityState.id});await qualityPoll();});
 qualityEl('quality-refresh').onclick=()=>qualityAct(async()=>{await qualityPoll();if(qualityState.id){await qualityPackages();await qualityFunctions();}});
@@ -336,23 +406,29 @@ render=function(){
   return result;
 };
 function qualityApplicationScore(load=true) {
+  if(load&&report&&qualityState.loadedReport!==report&&qualityState.loadingReport!==report) {
+    const current=report;
+    qualityState.loadingReport=current;
+    qualityRequest('/api/test-quality/status').then(async data=>{
+      if(report!==current)return;
+      qualityState.loadedReport=current;qualityState.latest=data.assessments?.[0]||null;
+      await qualityRefreshIndicators(qualityState.latest);
+      qualityApplicationScore(false);
+    }).catch(error=>{
+      qualityNotice(error.message,true);
+      const link=document.querySelector('.quality-overview-link');
+      if(link){link.textContent='Test Quality · saved results unavailable';link.title=error.message;}
+    }).finally(()=>{if(qualityState.loadingReport===current)qualityState.loadingReport=null;});
+  }
   if(mode.kind!=='application')return;
   const parent=document.querySelector('#application-overview .entry-purpose');
   if(!parent)return;
   let link=parent.querySelector('.quality-overview-link');
   if(!link){link=button('Test Quality · optional AI assessment',()=>qualityOpen(),parent);link.className='quality-overview-link';}
   const show=()=>{
-    const saved=qualityState.latest;
-    link.textContent=saved?`Saved AI test-quality score · ${qualityScore(saved.summary?.score)} · ${saved.status}`:'Test Quality · optional AI assessment';
-    link.title='Optional AI judgment on pinned evidence, not measured coverage. Saved evidence may differ from current source.';
+    const saved=qualityState.latest,quality=qualityIndicator();
+    link.textContent=saved?`Test Quality · ${quality.value===null?'Not assessed':quality.value.toFixed(1)+' / 100'}`:'Test Quality · Not assessed';
+    link.title='Open Test Quality results for this source snapshot.';
   };
   show();
-  if(load&&qualityState.loadedReport!==report) {
-    const current=report;
-    qualityRequest('/api/test-quality/status').then(data=>{
-      if(report!==current)return;
-      qualityState.loadedReport=current;qualityState.latest=data.assessments?.[0]||null;
-      if(link.isConnected)show();
-    }).catch(error=>{if(link.isConnected){link.textContent='Test Quality · saved results unavailable';link.title=error.message;}});
-  }
 }

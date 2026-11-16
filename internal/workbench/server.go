@@ -37,7 +37,11 @@ type Server struct {
 	changeJob       *changeJob
 	changeError     string
 	changeClosed    bool
+	qualityStartMu  sync.Mutex
+	qualityStarting chan struct{}
 	qualityMu       sync.Mutex
+	qualityReadMu   sync.Mutex
+	qualitySaved    *testquality.Assessment
 	qualityStore    testquality.Store
 	qualityReady    bool
 	qualityJobs     map[string]*qualityJob

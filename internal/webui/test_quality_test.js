@@ -12,7 +12,9 @@ test('Test Quality launches explicitly, retains background context and drills in
   const report={root:'/repo',module:'app',sourceSHA256:'ordinary',packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]};
   const identity={snapshotID:'pinned',module:'app',symbolID:'TestF'};
   const summary={score:75,counts:{scored:1,unreviewed:2,insufficient:0,excluded:4},partial:true};
-  let running=false,exists=false,external=false,jobStatus=null,enabled=true,narratives=true;
+  let running=false,exists=false,external=false,jobStatus=null,enabled=true,narratives=true,releaseStart;
+  const startGate=new Promise(resolve=>{releaseStart=resolve;});
+  let delayStart=true;
   dom.window.fetch=async(url,options)=>{
     const args=options?.body?JSON.parse(options.body):{};
     requests.push({url,args});
@@ -20,8 +22,9 @@ test('Test Quality launches explicitly, retains background context and drills in
     if(url==='/api/snapshot')value=report;
     else if(url==='/api/review')value={running:false,run:null};
     else if(url==='/api/chat/status')value={enabled,external,baseURL:'http://localhost:9000',model:'test',snapshot:{id:'ordinary'}};
-    else if(url==='/api/test-quality/start'){exists=true;running=true;value={id:'assessment',status:'running'};}
+    else if(url==='/api/test-quality/start'){if(delayStart)await startGate;exists=true;running=true;value={id:'assessment',status:'running'};}
     else if(url==='/api/test-quality/status')value={assessments:exists?[{id:'assessment',status:jobStatus||(running?'running':'completed'),summary}]:[]};
+    else if(args.operation==='indicators')value={assessmentID:'assessment',modules:[{module:'app',snapshotID:'pinned',sourceSHA256:'ordinary',summary,packages:[{package:'app/service',summary:{score:50}}]}]};
     else if(args.operation==='overview')value={assessmentID:'assessment',status:jobStatus||(running?'running':'completed'),version:'test-quality/3',model:'test',summary,categories:{'assertion-strength':75},limitations:['Statement coverage is not assertion quality.'],moduleCount:1};
     else if(args.operation==='modules')value={items:[{...identity,package:'app/service',summary,findings:1}],nextOffset:null,total:1};
     else if(args.operation==='tests')value={items:[{identity,name:'TestF',package:'app/service',status:'scored',summary,findingCount:1}],nextOffset:null,total:1};
@@ -44,8 +47,46 @@ test('Test Quality launches explicitly, retains background context and drills in
     await vm.runInContext('qualityOpen()',ctx);
     assert.equal(requests.some(r=>r.url==='/api/test-quality/start'),false,'opening view must not launch AI');
     assert.equal(dom.window.document.querySelector('#test-quality-workspace').hidden,false);
+    const indicatorRequests=()=>requests.filter(r=>r.args.operation==='indicators').length;
+    const initialIndicators=indicatorRequests();
+    await vm.runInContext("qualityState.indicatorKey=null;qualityState.latest={id:'assessment',status:'running',updatedAt:'1'};qualityRefreshIndicators(qualityState.latest)",ctx);
+    await vm.runInContext("qualityState.latest={id:'assessment',status:'running',updatedAt:'2'};qualityRefreshIndicators(qualityState.latest)",ctx);
+    assert.equal(indicatorRequests()-initialIndicators,1,'status polling must not reload the whole indicator projection for every checkpoint');
+    await vm.runInContext("qualityState.latest={id:'assessment',status:'completed',updatedAt:'3'};qualityRefreshIndicators(qualityState.latest)",ctx);
+    assert.equal(indicatorRequests()-initialIndicators,2,'completion must refresh the indicator projection');
+    vm.runInContext(`qualityState.indicators={assessmentID:'assessment',modules:[{module:'app',snapshotID:'pinned',sourceSHA256:'ordinary',summary:{score:75},packages:[{package:'app/service',summary:{score:50}}]}]}`,ctx);
+    vm.runInContext("qualityState.latest={id:'assessment'}",ctx);
+    vm.runInContext("qualityState.latest={id:'newer'};signalSummary(document.getElementById('signal-summary'))",ctx);
+    assert.equal([...dom.window.document.querySelectorAll('#signal-summary [role=button]')].find(n=>n.getAttribute('aria-label')?.startsWith('Test Quality')).title,'Test Quality · Not assessed','a previous assessment must not appear while the new assessment is loading');
+    vm.runInContext("qualityState.latest={id:'assessment'}",ctx);
+    exists=true;
+    vm.runInContext("signalSummary(document.getElementById('signal-summary'),{package:'app/service'})",ctx);
+    assert.match(dom.window.document.querySelector('#signal-summary').textContent,/50.*Test Quality/s,'package view must show its test quality');
+    await vm.runInContext(`qualityState.indicators.modules[0].packages[0].summary.score=25;
+      nodeSignalIndicators(svg('g',{id:'quality-test-node'},document.getElementById('graph')),{package:'app/service'},145,118);
+      qualityState.indicatorKey=null;qualityState.latest={id:'assessment',status:'completed'};
+      qualityRefreshIndicators(qualityState.latest)`,ctx);
+    assert.match(dom.window.document.querySelector('#quality-test-node [data-signal="test-quality"]').getAttribute('aria-label'),/50\.0/,'loaded indicators must update already visible graph nodes without resetting the view');
+    dom.window.document.querySelector('#quality-test-node').remove();
+    await [...dom.window.document.querySelectorAll('#signal-summary [role=button]')].find(n=>n.getAttribute('aria-label')?.startsWith('Test Quality')).onclick();
+    assert.ok(requests.some(r=>r.args.operation==='tests'&&r.args.package==='app/service'&&r.args.snapshotID==='pinned'),'package indicator must open its scoped tests');
+    assert.match(dom.window.document.querySelector('#quality-list-heading').textContent,/app\/service/,'scoped results must identify the selected package');
+    exists=false;
+    vm.runInContext('qualityState.id=null;qualityState.latest=null',ctx);
+    vm.runInContext("signalSummary(document.getElementById('signal-summary'),{symbolID:'unknown'})",ctx);
+    assert.match(dom.window.document.querySelector('#signal-summary').textContent,/Not assessed.*Test Quality/s,'function without linked tests must remain unassessed');
+    vm.runInContext("qualityState.indicators.modules[0].sourceSHA256='different';signalSummary(document.getElementById('signal-summary'),{package:'app/service'})",ctx);
+    assert.match(dom.window.document.querySelector('#signal-summary').textContent,/Not assessed.*Test Quality/s,'stale source results must not be presented as current');
+    vm.runInContext("visualMetrics(document.getElementById('quality-detail'),['unknown'])",ctx);
+    assert.ok(dom.window.document.querySelector('#quality-detail [data-metric=\"test-quality\"]'),'visual review must include Test Quality');
     assert.equal(dom.window.document.querySelector('#quality-execute').checked,true,'fresh execution authorization must default on');
-    await dom.window.document.querySelector('#quality-start').onclick();
+    const start=dom.window.document.querySelector('#quality-start');
+    const pending=start.onclick();
+    assert.equal(start.disabled,true,'starting must immediately prevent repeated clicks');
+    assert.match(dom.window.document.querySelector('#quality-notice').textContent,/starting|preparing/i,'starting must immediately acknowledge the action');
+    releaseStart();delayStart=false;
+    await pending;
+    assert.equal(start.disabled,false,'start control should recover after the request');
     assert.equal(requests.filter(r=>r.url==='/api/test-quality/start').length,1);
     assert.equal(requests.find(r=>r.url==='/api/test-quality/start').args.allowExecution,true);
     enabled=false;
@@ -132,7 +173,13 @@ test('Test Quality launches explicitly, retains background context and drills in
     await new Promise(resolve=>setImmediate(resolve));
     const overviewLink=dom.window.document.querySelector('.quality-overview-link');
     assert.ok(overviewLink,'Application overview does not link to saved AI test-quality assessment');
-    assert.match(overviewLink.textContent,/AI.*75\.0/);
+    assert.match(overviewLink.textContent,/75\.0/,'matching source score must appear on the application overview');
+    vm.runInContext("report.sourceSHA256='changed';qualityApplicationScore(false)",ctx);
+    assert.match(overviewLink.textContent,/Not assessed/,'a stale saved score must not be shown for the open source');
+    const statusReads=requests.filter(r=>r.url==='/api/test-quality/status').length;
+    vm.runInContext("qualityState.loadedReport=null;go({kind:'packages'})",ctx);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(requests.filter(r=>r.url==='/api/test-quality/status').length>statusReads,'a new snapshot must load indicators even when browsing outside Application');
   }finally{dom.window.close();}
 });
 
@@ -156,6 +203,9 @@ test('Test Quality pages collective and diagnostic detail without executing work
     let value={};
     if(url==='/api/snapshot')value=report;
     else if(url==='/api/chat/status')value={enabled:true,external:false};
+    else if(url==='/api/test-quality/status')value={assessments:[{id:'saved',status:'completed',summary:{counts:{scored:1}}}]};
+    else if(args.operation==='modules')value={items:[],nextOffset:null};
+    else if(args.operation==='tests')value={items:[{identity:{snapshotID:'pinned',module:'app',symbolID:'test'},name:'TestRange',package:'app',status:'scored',summary:{score:75},findingCount:0}],nextOffset:null};
     else if(args.operation==='overview')value={assessmentID:'saved',version:'test-quality/3',unit:'test',status:'completed',summary:{counts:{scored:1}},categories:{}};
     else if(args.operation==='suite')value={status:'scored'};
     else if(args.operation==='expectation')value={id:'range',description:'Range contract',basis:'documented',state:'supported',rationale:'Contract basis',scope:[{snapshotID:'pinned',module:'app',symbolID:'TestRange'}],evidence:[citation]};
@@ -167,6 +217,8 @@ test('Test Quality pages collective and diagnostic detail without executing work
     for(const match of html.matchAll(/<script src="\/([^"]+)"><\/script>/g))
       vm.runInContext(fs.readFileSync(path.join(__dirname,match[1]),'utf8'),ctx,{filename:match[1]});
     await new Promise(resolve=>setImmediate(resolve));
+    await vm.runInContext("qualityOpen()",ctx);
+    assert.match(dom.window.document.querySelector('#quality-functions').textContent,/TestRange/,'opening a saved review should show its tests without an extra selection');
     await vm.runInContext("qualityState.id='saved';qualityOverview()",ctx);
     const click=async text=>{
       const button=[...dom.window.document.querySelectorAll('#quality-overview button')].find(b=>b.textContent.includes(text));
@@ -175,6 +227,8 @@ test('Test Quality pages collective and diagnostic detail without executing work
     await click('Inspect collective');
     await click('Range contract');
     assert.match(dom.window.document.querySelector('#quality-overview').textContent,/Group observation.*1 selected test.*other groups may contribute/);
+    await vm.runInContext('qualityPoll()',ctx);
+    assert.match(dom.window.document.querySelector('#quality-overview').textContent,/Range contract/,'status refresh must not erase the evidence being read');
     assert.equal(requests.find(r=>r.args.operation==='expectation').args.expectationID,'range');
     await click('More conditions');
     assert.equal(requests.filter(r=>r.args.operation==='conditions').at(-1).args.offset,1);

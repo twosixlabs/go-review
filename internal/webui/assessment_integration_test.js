@@ -36,12 +36,12 @@ test('real review renderers expose signals in overviews, graph cards and direct 
     const run=code=>vm.runInContext(code,context);
     assert.match(document.querySelector('#signal-summary').textContent,/Hygiene/);
     const labels=parent=>[...parent.querySelectorAll('.metric-label')].map(n=>n.textContent);
-    assert.deepEqual(labels(document.querySelector('#signal-summary')),['Coverage','Complexity · max','Architecture','Hygiene · 1 not run']);
+    assert.deepEqual(labels(document.querySelector('#signal-summary')),['Coverage','Complexity · max','Architecture','Hygiene · 1 not run','Test Quality']);
     assert.equal(document.querySelectorAll('#signal-summary button.metric-gauge').length,0,'signal gauges must use the same inline styling as coverage/complexity');
-    assert.equal(document.querySelectorAll('#signal-summary [role="button"].metric-gauge').length,2,'inline signal drill-down must remain accessible');
-    assert.equal(document.querySelectorAll('#signal-summary .metric-dial svg').length,4,'overview metrics must share gauge widgets');
+    assert.equal(document.querySelectorAll('#signal-summary [role="button"].metric-gauge').length,3,'inline signal drill-down must remain accessible');
+    assert.equal(document.querySelectorAll('#signal-summary .metric-dial svg').length,5,'overview metrics must share gauge widgets');
     const scopedLabels=parent=>[...parent.querySelectorAll('.review-meter small')].map(n=>n.textContent);
-    assert.deepEqual(scopedLabels(document.querySelector('.endpoint-row')),['Coverage','CC · max','Arch']);
+    assert.deepEqual(scopedLabels(document.querySelector('.endpoint-row')),['Coverage','CC · max','Arch','Test quality']);
     assert.equal(document.querySelectorAll('.endpoint-row [data-metric="hygiene"]').length,0,
       'snapshot-wide hygiene must not masquerade as an endpoint metric');
     assert.equal(document.querySelectorAll('.endpoint-row button').length,0,'overview row must not nest interactive buttons');
@@ -52,10 +52,11 @@ test('real review renderers expose signals in overviews, graph cards and direct 
       const nodes=document.querySelectorAll('#graph>.node');
       assert.ok(nodes.length,mode.kind+' should render graph nodes');
       assert.equal(document.querySelectorAll('#graph>.node .node-signals').length,nodes.length,mode.kind+' missing node indicators');
-      assert.equal(document.querySelectorAll('#graph>.node .node-signals .signal-dial svg').length,nodes.length*2,mode.kind+' missing architecture/hygiene gauge widgets');
+      assert.equal(document.querySelectorAll('#graph>.node .node-signals .signal-dial svg').length,nodes.length*3,mode.kind+' missing signal gauge widgets');
+      assert.equal(document.querySelectorAll('#graph>.node [data-signal="test-quality"]').length,nodes.length,mode.kind+' missing test quality indicators');
       if(['logical','symbol','dataflow'].includes(mode.kind)) {
-        assert.deepEqual(labels(document.querySelector('.context-signal-summary')),['Coverage','Complexity','Architecture','Hygiene · 1 not run'],mode.kind+' detail must keep metrics together in the same order');
-        assert.equal(document.querySelectorAll('#detail .metric-gauge').length,4,mode.kind+' detail must not duplicate metrics');
+        assert.deepEqual(labels(document.querySelector('.context-signal-summary')),['Coverage','Complexity','Architecture','Hygiene · 1 not run','Test Quality'],mode.kind+' detail must keep metrics together in the same order');
+        assert.equal(document.querySelectorAll('#detail .metric-gauge').length,5,mode.kind+' detail must not duplicate metrics');
       }
     }
     const previous=run('JSON.stringify(mode)');
@@ -71,13 +72,13 @@ test('real review renderers expose signals in overviews, graph cards and direct 
     assert.ok(document.querySelector('#graph>.node .signal-dial svg'),'call neighborhood missing gauges');
     document.querySelector('#hygiene').click();
     assert.equal(run('mode.section'),'hygiene');
-    assert.equal(document.querySelectorAll('.assessment-summary .metric-dial svg').length,4,'assessment overview missing shared metric row');
-    assert.equal(document.querySelectorAll('[data-package] .metric-dial svg').length,4,'package overview row missing shared metrics');
+    assert.equal(document.querySelectorAll('.assessment-summary .metric-dial svg').length,5,'assessment overview missing shared metric row');
+    assert.equal(document.querySelectorAll('[data-package] .metric-dial svg').length,5,'package overview row missing shared metrics');
     assert.equal(document.querySelectorAll('[data-package] button').length,0);
     const summary=document.querySelector('[data-package] .overview-metrics');
-    assert.deepEqual(labels(summary),['Coverage','Complexity · max','Architecture','Hygiene · 1 not run']);
+    assert.deepEqual(labels(summary),['Coverage','Complexity · max','Architecture','Hygiene · 1 not run','Test Quality']);
     run("report.symbols[0].name='init';go({kind:'application',section:'startup'})");
-    assert.equal(document.querySelectorAll('.startup-entry .review-meter>svg svg').length,3,'startup overview missing scoped dials');
+    assert.equal(document.querySelectorAll('.startup-entry .review-meter>svg svg').length,4,'startup overview missing scoped dials');
     run(`report.coverage={blocks:[{fileID:'file',startLine:2,startColumn:1,endLine:2,endColumn:20,statements:4,count:1}]};
       report.symbols.push({...report.symbols[0],id:'second',name:'Other',cyclomatic:20});
       go({kind:'application'})`);

@@ -46,6 +46,41 @@ func TestQueryFindingsRetainQualifiedScopeAndFilters(t *testing.T) {
 	}
 }
 
+func TestQueryIndicatorsPreserveModuleAndPackageScope(t *testing.T) {
+	a := factsAssessment("package example\nfunc TestF() {}\n")
+	a.Reports[0].Report.SourceSHA256 = "source-revision"
+	score := 3
+	a.Items[0].Status = StatusScored
+	a.Items[0].Ratings = []Rating{
+		{Dimension: Craftsmanship, State: RatingAssessed, Value: &score, Rationale: "Clear structure", Evidence: []Citation{a.Items[0].Declaration}},
+		{Dimension: AssertionStrength, State: RatingAssessed, Value: &score, Rationale: "Checks result", Evidence: []Citation{a.Items[0].Declaration}},
+	}
+	raw, err := Query(t.Context(), a, QueryInput{AssessmentID: a.ID, Operation: "indicators"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Modules []struct {
+			Module       string  `json:"module"`
+			SourceSHA256 string  `json:"sourceSHA256"`
+			Summary      Summary `json:"summary"`
+			Packages     []struct {
+				Package string  `json:"package"`
+				Summary Summary `json:"summary"`
+			} `json:"packages"`
+		} `json:"modules"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Modules) != 1 || result.Modules[0].Module != "example" || result.Modules[0].SourceSHA256 != "source-revision" ||
+		result.Modules[0].Summary.Score == nil || *result.Modules[0].Summary.Score != 75 ||
+		len(result.Modules[0].Packages) != 1 || result.Modules[0].Packages[0].Package != "example" ||
+		result.Modules[0].Packages[0].Summary.Score == nil || *result.Modules[0].Packages[0].Summary.Score != 75 {
+		t.Fatalf("indicator scope or score lost: %s", raw)
+	}
+}
+
 func TestQueryCollectiveDetailsRemainPageable(t *testing.T) {
 	a := qualityLiveAssessment(t, `func TestContract(t *testing.T) {Classify(1)}`)
 	behavior := ExpectedBehavior{ID: "range", Description: "Accept values in range", Basis: "documented", State: "supported"}

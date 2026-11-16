@@ -807,6 +807,15 @@ without model judgments. Browsing and saved-result access do not require a provi
 External-provider launches require explicit source/evidence-transfer consent.
 Credentials are not stored in assessments.
 
+Project and package indicators show scores only when the saved source matches
+the open snapshot. A function without a reliable test association is shown as
+**Not assessed**. Selecting a package indicator opens that package's tests.
+Indicators update when an assessment changes state or finishes.
+Opening a finished assessment verifies its archive once; subsequent navigation
+reuses that immutable snapshot until a different saved assessment is opened.
+Obsolete archive formats are omitted from status listings without logging on
+each poll. Opening one directly still reports an unsupported-version error.
+
 At launch the host pins all included module reports, production/test/helper
 source, coverage and referenced execution artifacts into independent private
 storage under the OS user cache, `go-review/test-quality`. Source/report and

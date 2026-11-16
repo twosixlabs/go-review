@@ -3,7 +3,6 @@ package testquality
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -239,7 +238,6 @@ func (s Store) ListSummaries(root string) ([]*Assessment, error) {
 			return nil, err
 		}
 		if header.Version != EvidenceRubricVersion {
-			log.Printf("Skipping obsolete Test Quality assessment %s: unsupported version %q; start a new assessment", entry.Name(), header.Version)
 			continue
 		}
 		var archive qualityArchive

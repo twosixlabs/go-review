@@ -1,10 +1,12 @@
 package testquality
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +59,10 @@ func TestStoreAssessmentPopulationIsTestsNotProductionFunctions(t *testing.T) {
 }
 
 func TestStoreRejectsObsoleteAssessmentsWithoutBlockingCurrentArchives(t *testing.T) {
+	var messages bytes.Buffer
+	writer := log.Writer()
+	log.SetOutput(&messages)
+	defer log.SetOutput(writer)
 	for _, version := range []string{"test-quality/1", "test-quality/2"} {
 		t.Run(version, func(t *testing.T) {
 			r := testReport(t.TempDir())
@@ -89,11 +95,16 @@ func TestStoreRejectsObsoleteAssessmentsWithoutBlockingCurrentArchives(t *testin
 			if err := s.Recover(); err != nil {
 				t.Fatalf("obsolete archive blocked current recovery: %v", err)
 			}
-			list, err := s.ListSummaries("")
-			if err != nil || len(list) != 1 || list[0].ID != current.ID {
-				t.Fatalf("current archive listing lost: %+v %v", list, err)
+			for range 3 {
+				list, err := s.ListSummaries("")
+				if err != nil || len(list) != 1 || list[0].ID != current.ID {
+					t.Fatalf("current archive listing lost: %+v %v", list, err)
+				}
 			}
 		})
+	}
+	if messages.Len() != 0 {
+		t.Fatalf("expected obsolete archives spammed polling logs: %s", messages.String())
 	}
 }
 
@@ -143,6 +154,28 @@ func TestStorePinsEvidenceAndRecoversInterruptedJob(t *testing.T) {
 	}
 	if _, err := store.Load("../escape"); err == nil {
 		t.Fatal("accepted invalid ID")
+	}
+}
+
+func TestStoreRecoveryReadsOnlyUnfinishedArchives(t *testing.T) {
+	r := testReport(t.TempDir())
+	store := Store{Directory: t.TempDir()}
+	a, err := store.Create(t.Context(), &review.RepositoryReview{Root: r.Root, Modules: []review.ReviewedModule{{Report: r}}}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Status = "completed"
+	if err := store.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Directory, a.ID, a.archive.Reports[0].Path), []byte("damaged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Recover(); err != nil {
+		t.Fatalf("recovery loaded an already finished archive: %v", err)
+	}
+	if _, err := store.Load(a.ID); err == nil {
+		t.Fatal("opening the completed archive did not report corrupted evidence")
 	}
 }
 

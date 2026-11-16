@@ -54,13 +54,14 @@
     if(!context.symbolID&&!context.package&&!context.location)context={symbolID:'unresolved-node'};
     const document=group.ownerDocument,NS='http://www.w3.org/2000/svg',state=indicators(report,context);
     const gauges=signalGauges(report,context);
+    if(options.quality)gauges['test-quality']=options.quality;
     const holder=document.createElementNS(NS,'g');holder.setAttribute('class','node-signals');
     holder.setAttribute('transform',`translate(${options.x||0},${options.y||0})`);
     group.append(holder);
-    for(const [index,signal] of ['architecture','hygiene'].entries()) {
+    for(const [index,signal] of Object.keys(gauges).entries()) {
       const badge=document.createElementNS(NS,'g');
-      badge.setAttribute('class','signal-link level-'+(index?state.hygieneLevel:state.level));
-      badge.setAttribute('transform',`translate(${index*76},0) scale(.5)`);
+      badge.setAttribute('class','signal-link level-'+(signal==='architecture'?state.level:signal==='hygiene'?state.hygieneLevel:'not-assessed'));
+      badge.setAttribute('transform',`translate(${index*(options.spacing||76)},0) scale(.5)`);
       badge.dataset.signal=signal;badge.setAttribute('role','button');badge.setAttribute('tabindex','0');
       const gauge=gauges[signal],title=gauge.title;
       badge.setAttribute('aria-label',title);

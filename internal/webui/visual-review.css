@@ -48,7 +48,7 @@
 .review-meter>svg{width:30px;height:24px;flex:none;cursor:help}
 .review-meter strong{font-size:10px;display:block;font-weight:600;white-space:nowrap}
 .review-meter small{font-size:9px;display:block;color:#a6b7cd;white-space:nowrap}
-.review-meter[data-metric=architecture] strong{white-space:normal}
+.review-meter[data-metric=architecture] strong,.review-meter[data-metric=test-quality] strong{white-space:normal}
 .review-unassessed{font-size:9px;color:#bdcfe4;flex-basis:100%}
 .review-board>.review-edges{position:absolute;inset:0;width:100%;height:100%;overflow:visible;cursor:default;z-index:1;pointer-events:none}
 .review-edge-line{fill:none;stroke:#91abc9;stroke-width:1.6;pointer-events:none}

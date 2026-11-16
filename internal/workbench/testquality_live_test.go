@@ -240,7 +240,7 @@ func qualityLiveBrowserData(t *testing.T, server *Server, saved *testquality.Ass
 		"quality-status": map[string]any{"assessments": []any{qualityCompact(saved)}},
 		"chat-status":    map[string]any{"enabled": cfg.Enabled, "external": cfg.External(), "model": cfg.Model, "baseURL": cfg.BaseURL},
 	}
-	for _, operation := range []string{"overview", "suite", "expectations", "tests", "facts", "modules", "diagnostics", "suite-findings"} {
+	for _, operation := range []string{"overview", "indicators", "suite", "expectations", "tests", "facts", "modules", "diagnostics", "suite-findings"} {
 		data, err := server.queryTestQuality(t.Context(), testquality.QueryInput{AssessmentID: saved.ID, Operation: operation})
 		if err != nil {
 			t.Fatalf("saved %s read failed: %v", operation, err)

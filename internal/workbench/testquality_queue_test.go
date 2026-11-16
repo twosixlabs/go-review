@@ -3,13 +3,147 @@ package workbench
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/russellbrasser/go-review/internal/intelligence"
+	"github.com/russellbrasser/go-review/internal/review"
 	"github.com/russellbrasser/go-review/internal/testquality"
 )
+
+func TestQualityStatusAvailableWhileEvidenceIsBeingPinned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("named pipe fixture requires a Unix system")
+	}
+	s := qualityFixture(t)
+	s.ConfigureAgent(intelligence.Config{})
+	dir := t.TempDir()
+	pipe := filepath.Join(dir, "events")
+	if err := exec.Command("mkfifo", pipe).Run(); err != nil {
+		t.Fatal(err)
+	}
+	s.review.Modules[0].Report.UnitEvidence = &review.UnitEvidence{Directory: dir, Runs: []review.UnitTestRun{{EventsPath: pipe}}}
+	start := make(chan int, 1)
+	go func() {
+		w := qualityRequest(t, s, "/api/test-quality/start", `{"allowExecution":false}`)
+		start <- w.Code
+	}()
+	writers := make(chan *os.File, 1)
+	go func() {
+		f, err := os.OpenFile(pipe, os.O_WRONLY, 0600)
+		if err != nil {
+			t.Error(err)
+		}
+		writers <- f
+	}()
+	var writer *os.File
+	select {
+	case writer = <-writers:
+	case <-time.After(5 * time.Second):
+		t.Fatal("assessment did not begin reading retained evidence")
+	}
+	if writer == nil {
+		t.Fatal("could not open test pipe")
+	}
+	reviewUpdated := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		s.review.Directory = "updated"
+		s.mu.Unlock()
+		close(reviewUpdated)
+	}()
+	select {
+	case <-reviewUpdated:
+	case <-time.After(time.Second):
+		t.Error("review update blocked while assessment was pinning evidence")
+	}
+	status := make(chan int, 1)
+	go func() { status <- qualityRequest(t, s, "/api/test-quality/status", "").Code }()
+	var statusCode int
+	select {
+	case statusCode = <-status:
+	case <-time.After(time.Second):
+	}
+	writer.Close()
+	<-reviewUpdated
+	if statusCode == 0 {
+		statusCode = <-status
+		t.Error("status blocked while assessment was pinning evidence")
+	}
+	if statusCode != 200 {
+		t.Errorf("status failed: %d", statusCode)
+	}
+	if code := <-start; code != 202 {
+		t.Errorf("assessment start failed: %d", code)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.ShutdownTestQuality(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQualityShutdownWaitsForEvidencePinning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("named pipe fixture requires a Unix system")
+	}
+	s := qualityFixture(t)
+	dir := t.TempDir()
+	pipe := filepath.Join(dir, "events")
+	if err := exec.Command("mkfifo", pipe).Run(); err != nil {
+		t.Fatal(err)
+	}
+	s.review.Modules[0].Report.UnitEvidence = &review.UnitEvidence{Directory: dir, Runs: []review.UnitTestRun{{EventsPath: pipe}}}
+	start := make(chan int, 1)
+	go func() { start <- qualityRequest(t, s, "/api/test-quality/start", `{"allowExecution":false}`).Code }()
+	writers := make(chan *os.File, 1)
+	go func() {
+		f, err := os.OpenFile(pipe, os.O_WRONLY, 0600)
+		if err != nil {
+			t.Error(err)
+		}
+		writers <- f
+	}()
+	var writer *os.File
+	select {
+	case writer = <-writers:
+	case <-time.After(5 * time.Second):
+		t.Fatal("assessment did not begin reading retained evidence")
+	}
+	if writer == nil {
+		t.Fatal("could not open test pipe")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- s.ShutdownTestQuality(ctx) }()
+	returned := false
+	select {
+	case err := <-stopped:
+		returned = true
+		t.Errorf("shutdown returned before evidence pinning finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	writer.Close()
+	if code := <-start; code != 409 {
+		t.Errorf("start after shutdown: got %d, want 409", code)
+	}
+	if !returned {
+		select {
+		case err := <-stopped:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+}
 
 func TestQualityQueueCancellationDoesNotReleaseRunningPredecessor(t *testing.T) {
 	s := qualityFixture(t)

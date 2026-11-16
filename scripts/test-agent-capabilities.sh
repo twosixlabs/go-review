@@ -39,7 +39,7 @@ case "$selector" in
     go test -race ./internal/workbench ./internal/testquality -run 'TestQuality|TestQueue' -count=1
     ;;
   quality-ui)
-    node --test internal/webui/test_quality_test.js internal/webui/retrieval_test.js internal/webui/agents_ui_test.js
+    node --test internal/webui/test_quality_test.js internal/webui/assessment_integration_test.js internal/webui/retrieval_test.js internal/webui/agents_ui_test.js
     ;;
   quality-build)
     test "$#" -eq 2 || { echo "quality-build requires OUTPUT" >&2; exit 2; }

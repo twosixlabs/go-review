@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,15 +47,18 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 	}
 	a := &Assessment{ID: hex.EncodeToString(id), Version: EvidenceRubricVersion, Root: run.Root, ReviewID: run.Directory,
 		Status: "queued", Provider: provider, Model: model, CreatedAt: time.Now().UTC(), Items: []Responsibility{}}
-	dir := filepath.Join(s.Directory, a.ID)
-	if err := os.Mkdir(dir, 0700); err != nil {
+	staging, err := os.MkdirTemp(s.Directory, ".preparing-")
+	if err != nil {
 		return nil, err
 	}
+	dir := filepath.Join(staging, a.ID)
+	finalDir := filepath.Join(s.Directory, a.ID)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return nil, errors.Join(err, os.Remove(staging))
+	}
 	defer func() {
-		if err != nil {
-			if cleanup := os.RemoveAll(dir); cleanup != nil {
-				err = fmt.Errorf("%w; clean assessment %s: %v", err, dir, cleanup)
-			}
+		if cleanup := os.RemoveAll(staging); cleanup != nil {
+			err = errors.Join(err, fmt.Errorf("clean assessment staging %s: %w", staging, cleanup))
 		}
 	}()
 	for i, m := range run.Modules {
@@ -80,6 +84,7 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 		if r.UnitEvidence != nil {
 			original := r.UnitEvidence.Directory
 			dest := filepath.Join(dir, fmt.Sprintf("module-%d", i))
+			finalDest := filepath.Join(finalDir, fmt.Sprintf("module-%d", i))
 			copyPath := func(path *string) error {
 				if *path == "" {
 					return nil
@@ -113,8 +118,8 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 				if err := os.WriteFile(target, data, 0600); err != nil {
 					return err
 				}
-				*path = target
-				a.Artifacts = append(a.Artifacts, Artifact{Path: target, SHA256: Digest(data)})
+				*path = filepath.Join(finalDest, relative)
+				a.Artifacts = append(a.Artifacts, Artifact{Path: *path, SHA256: Digest(data)})
 				return nil
 			}
 			for j := range r.UnitEvidence.Runs {
@@ -135,7 +140,7 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 					return nil, err
 				}
 			}
-			r.UnitEvidence.Directory = dest
+			r.UnitEvidence.Directory = finalDest
 		}
 		pinnedJSON, err := json.Marshal(&r)
 		if err != nil {
@@ -169,7 +174,13 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 	if _, err := AggregateVersion(a.Version, a.Items); err != nil {
 		return nil, err
 	}
-	if err := s.Save(a); err != nil {
+	if err := (Store{Directory: staging}).Save(a); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(dir, finalDir); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -311,17 +322,22 @@ func (s Store) List(root string) ([]*Assessment, error) {
 
 // Recover does not resume model calls or claim unfinished work succeeded.
 func (s Store) Recover() error {
-	list, err := s.List("")
+	list, err := s.ListSummaries("")
 	if err != nil {
 		return err
 	}
-	for _, a := range list {
-		if a.Status == "running" || a.Status == "queued" {
-			a.Status = "interrupted"
-			a.Error = "Workbench stopped before this assessment finished. Start a new assessment to review remaining scope."
-			if err := s.Save(a); err != nil {
-				return err
-			}
+	for _, entry := range list {
+		if entry.Status != "running" && entry.Status != "queued" {
+			continue
+		}
+		a, err := s.Load(entry.ID)
+		if err != nil {
+			return err
+		}
+		a.Status = "interrupted"
+		a.Error = "Workbench stopped before this assessment finished. Start a new assessment to review remaining scope."
+		if err := s.Save(a); err != nil {
+			return err
 		}
 	}
 	return nil

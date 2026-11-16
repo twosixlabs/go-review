@@ -149,7 +149,7 @@ function drawDial(parent,kind,m,options=GoReviewGraph.gaugeOptions(kind,m.value)
 function nodeGauges(group,location,complexity,y,width=320){
   for(const [i,kind] of ['coverage','complexity'].entries()){
     if(kind==='complexity'&&!Number.isFinite(complexity))continue;
-    const m=gaugeMetric(kind,location,complexity),x=25+i*76,g=svg('g',{class:'node-gauge tone-'+m.tone,transform:`translate(${x},${y-6}) scale(.5)`},group);
+    const m=gaugeMetric(kind,location,complexity),x=25+i*60,g=svg('g',{class:'node-gauge tone-'+m.tone,transform:`translate(${x},${y-6}) scale(.5)`},group);
     drawDial(g,kind,m);
     svg('text',{x:34,y:0,class:'dial-value'},g).textContent=m.value===null?'?':kind==='coverage'?Math.round(m.value)+'%':m.value;
     svg('text',{x:34,y:16,class:'dial-label'},g).textContent=kind==='coverage'?'Cov':'CC';

@@ -61,7 +61,7 @@ function drawFlow(nodes,edges,entry,clickNode,positions) {
     const owner=mode.kind==='symbol'||mode.kind==='dataflow'?sym(mode.id):node.symbol||node.owner||sym(node.ownerID);
     if(!node.architecture&&(mode.kind!=='logical'||node.symbol)&&(mode.kind!=='endpoint'||location))
       nodeGauges(group,location,['observed','logical','endpoint'].includes(mode.kind)||node.kind==='entry'?owner?.cyclomatic:undefined,124,W);
-    if(!node.architecture)nodeSignalIndicators(group,{symbolID:owner?.id,location:node.location},177,118);
+    if(!node.architecture)nodeSignalIndicators(group,{symbolID:owner?.id,location:node.location},145,118);
     svg('title',{},group).textContent=(node.members?node.members.length+' statements · select to expand\n':'')+node.label+'\n'+(node.comments||[]).map(c=>c.text).join('\n');
     const activate=()=>{selectedStep=node.id;root.querySelectorAll('.selected-step').forEach(n=>n.classList.remove('selected-step'));group.classList.add('selected-step');clickNode(node);};
     group.onclick=activate;

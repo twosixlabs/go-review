@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,44 @@ func qualityFixture(t *testing.T) *Server {
 	s.qualityStore = testquality.Store{Directory: t.TempDir()}
 	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: "http://127.0.0.1:12345", Model: "fake"})
 	return s
+}
+
+func TestQualitySavedNavigationReusesVerifiedEvidence(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Status = "completed"
+	if err := s.qualityStore.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	input := testquality.QueryInput{AssessmentID: a.ID, Operation: "overview"}
+	if _, err := s.queryTestQuality(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	// A browsing session owns the verified immutable snapshot, just as a live
+	// job does. Subsequent drill-down must not re-read its report records.
+	dir := filepath.Join(s.qualityStore.Directory, a.ID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "assessment.json" {
+			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	input.Operation = "tests"
+	data, err := s.queryTestQuality(t.Context(), input)
+	if err != nil || !strings.Contains(string(data), "TestF") {
+		t.Fatalf("drill-down reloaded immutable evidence: %s %v", data, err)
+	}
+	if _, err := s.qualityStore.Load(a.ID); err == nil {
+		t.Fatal("fresh archive opens must still verify retained evidence")
+	}
 }
 
 func TestQualityLargeSavedResultThroughHTTPAndMCP(t *testing.T) {

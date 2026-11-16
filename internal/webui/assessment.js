@@ -6,12 +6,18 @@ function openSignalResults(section,path,symbolID) {
   go({kind:'signals',package:section==='hygiene'?undefined:path,section,id:finding?.id});
 }
 function nodeSignalIndicators(group,context,x,y) {
+  group.dataset.qualityNode=JSON.stringify({context,x,y});
+  const quality=qualityIndicator(context),value=quality.value;
   GoReviewAssessment.renderNodeIndicators(group,report,context,{
-    x,y,onOpen:(section,path)=>openSignalResults(section,path,context.symbolID),
+    x,y,spacing:60,
+    quality:{options:GoReviewGraph.gaugeOptions('coverage',value),caption:value===null?'Not assessed':value.toFixed(1),label:'Test quality',
+      title:'Test Quality · '+(value===null?'Not assessed':value.toFixed(1)+' / 100'+(quality.partial?' · partial':''))},
+    onOpen:(section,path)=>section==='test-quality'?qualityOpenScope(context):openSignalResults(section,path,context.symbolID),
     drawGauge:(holder,options)=>drawDial(holder,'signal',{value:options.pointer?options.value:null},options)
   });
 }
 function signalSummary(parent,context={},interactive=true,includeMetrics=true) {
+  parent.dataset.qualitySummary=JSON.stringify({context,interactive,includeMetrics});
   parent.replaceChildren();
   parent.classList.add('overview-metrics');
   const symbol=context.symbolID?sym(context.symbolID):null;
@@ -52,6 +58,24 @@ function signalSummary(parent,context={},interactive=true,includeMetrics=true) {
     const caption=el('span',undefined,target,'metric-caption');
     el('strong',gauge.caption,caption);
     el('span',kind==='architecture'?'Architecture':gauge.label.replace(/^Hyg/,'Hygiene').replace(/ NR\b/,' not run').replace(/ E\b/,' errors'),caption,'metric-label');
+  }
+  if(typeof qualityIndicator==='function') {
+    const quality=qualityIndicator(context),value=quality.value;
+    const target=el('span',undefined,parent,'signal-metric metric-gauge');
+    const options=GoReviewGraph.gaugeOptions('coverage',value);
+    target.style.setProperty('--metric-color',options.gaugeColor);
+    target.title='Test Quality · '+(value===null?'Not assessed':value.toFixed(1)+' / 100'+(quality.partial?' · partial':''));
+    target.setAttribute('aria-label',target.title);
+    if(interactive) {
+      target.tabIndex=0;target.setAttribute('role','button');
+      target.onclick=()=>qualityOpenScope(context);
+      target.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();target.click();}};
+    }
+    const canvas=svg('svg',{viewBox:'-28 -28 56 34',class:'metric-dial','aria-hidden':'true'},target);
+    drawDial(canvas,'signal',{value},options);
+    const caption=el('span',undefined,target,'metric-caption');
+    el('strong',value===null?'Not assessed':value.toFixed(1),caption);
+    el('span','Test Quality',caption,'metric-label');
   }
   if(interactive)el('span',state.scope+' · hygiene: snapshot',parent,'signal-scope');
 }

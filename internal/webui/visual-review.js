@@ -10,27 +10,33 @@ function visualMetrics(parent,symbolIDs) {
   const architectureOptions={...GoReviewGraph.gaugeOptions('coverage',
     arch.level==='not-assessed'?null:GoReviewAssessment.rank[arch.level]),max:3,
     gaugeColor:colors[arch.level],levelColors:[colors[arch.level]]};
-  for(const [kind,value,caption,title,options] of [
+  const gauges=[
     ['coverage',m.coverage.value,m.coverage.value===null?'?':Math.round(m.coverage.value)+'%',
       metricDescription('coverage',m.coverage),null],
     ['complexity',m.complexity.value,m.complexity.value??'?',
       'Maximum cyclomatic complexity across '+count+' unique operation definitions; not a sum. '+m.complexity.unknown+' unmeasured.',null],
     ['architecture',architectureOptions.pointer?architectureOptions.value:null,GoReviewAssessment.labels[arch.level],
       'Highest supported-rule concern across '+count+' unique operation definitions. '+arch.unknown+' not assessed. Not a quality verdict.',architectureOptions]
-  ]) {
+  ];
+  if(typeof qualityIndicator==='function') {
+    const quality=qualityIndicator({symbolID:symbolIDs[0]||'unresolved'});
+    gauges.push(['test-quality',quality.value,quality.value===null?'Not assessed':quality.value.toFixed(1),
+      quality.value===null?'Test Quality: Not assessed':'Test Quality: '+quality.value.toFixed(1)+' / 100',GoReviewGraph.gaugeOptions('coverage',quality.value)]);
+  }
+  for(const [kind,value,caption,title,options] of gauges) {
     const meter=el('span',undefined,strip,'review-meter');meter.dataset.metric=kind;
     if(!parent.closest('button'))meter.tabIndex=0;
     meter.title=title;meter.setAttribute('role','meter');
     meter.setAttribute('aria-label',kind);meter.setAttribute('aria-valuetext',String(caption));
     if(value!==null) {
       meter.setAttribute('aria-valuenow',value);meter.setAttribute('aria-valuemin',kind==='complexity'?1:0);
-      meter.setAttribute('aria-valuemax',kind==='coverage'?100:kind==='architecture'?3:Math.max(25,value));
+      meter.setAttribute('aria-valuemax',kind==='coverage'||kind==='test-quality'?100:kind==='architecture'?3:Math.max(25,value));
     }
     const dial=svg('svg',{viewBox:'-28 -28 56 34','aria-hidden':'true'},meter);
-    drawDial(dial,kind==='architecture'?'signal':kind,{value},options||GoReviewGraph.gaugeOptions(kind,value));
+    drawDial(dial,kind==='architecture'||kind==='test-quality'?'signal':kind,{value},options||GoReviewGraph.gaugeOptions(kind,value));
     const label=el('span',undefined,meter);
     el('strong',String(caption),label);
-    el('small',kind==='coverage'?'Coverage':kind==='complexity'?'CC · max':'Arch',label);
+    el('small',kind==='coverage'?'Coverage':kind==='complexity'?'CC · max':kind==='architecture'?'Arch':'Test quality',label);
   }
   if(m.complexity.unknown||arch.unknown)
     el('span',Math.max(m.complexity.unknown,arch.unknown)+' unassessed',strip,'review-unassessed');
