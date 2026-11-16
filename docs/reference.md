@@ -913,7 +913,13 @@ step and context limits; after saved progress, conversation compaction retains
 the recorded ledger and requires new source reads for subsequent citations.
 Consecutive identical evidence reads with unchanged results trigger a reminder;
 another unchanged repetition stops the stalled investigation with an explicit
-error, preserving completed judgments.
+error, preserving completed judgments. Stalls and configured investigation
+limits stop only the affected package: other active and queued groups continue,
+and the assessment is marked partial with the affected scope and error. Provider
+or persistence failures still stop the entire assessment. A repeated-read error
+retains the tool arguments and original tool error, when present.
+The Test Quality overview displays the latest agent activity in a labelled panel
+above the scores; it is a current-status display, not a conversation history.
 Explicit live evaluation retains request, response, MCP-read and admission
 trajectories through `GO_REVIEW_QUALITY_TRACE_DIR`; ordinary assessments do not
 persist these full-context traces. It checks delivery of explained, evidence-

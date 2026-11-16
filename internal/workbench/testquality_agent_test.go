@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,123 @@ import (
 	"github.com/russellbrasser/go-review/internal/review"
 	"github.com/russellbrasser/go-review/internal/testquality"
 )
+
+func TestQualityAgentStallDoesNotCancelOtherGroups(t *testing.T) {
+	s := qualityFixture(t)
+	base := s.review.Modules[0]
+	s.review.Modules = nil
+	for i := 0; i < 6; i++ {
+		module := base
+		report := *base.Report
+		report.Module = fmt.Sprintf("module-%d", i)
+		module.Report = &report
+		s.review.Modules = append(s.review.Modules, module)
+	}
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := qualityAgentGroups(a.Items)
+	if len(groups) != 6 {
+		t.Fatalf("expected six independent groups, got %d", len(groups))
+	}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, r *http.Request, request qualityAgentRequest) {
+		var scope struct {
+			SnapshotID string `json:"snapshotID"`
+			Tests      []struct {
+				SymbolID string `json:"symbolID"`
+			} `json:"tests"`
+		}
+		if !strings.HasPrefix(request.Messages[0].Content, qualityAgentPrompt) {
+			last := request.Messages[len(request.Messages)-1]
+			if last.Role == "system" {
+				args, _ := json.Marshal(map[string]any{"snapshotID": groups[1].SnapshotID, "fileID": "test", "startLine": 3, "endLine": 3})
+				qualityAgentAnswer(w, qualityAgentCall("source", "review_source", string(args)))
+			} else if strings.Contains(last.Content, `"recorded":true`) {
+				qualityAgentAnswer(w)
+			} else {
+				args, _ := json.Marshal(map[string]any{
+					"snapshotID": groups[1].SnapshotID, "fileID": "test", "startLine": 3, "endLine": 3,
+					"behaviorAdequacy": 2, "conditionAdequacy": 2, "rationale": "Partial review; one package remains unreviewed.",
+				})
+				qualityAgentAnswer(w, qualityAgentCall("synthesis", "record_group", string(args)))
+			}
+			return
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(request.Messages[0].Content, qualityAgentPrompt)), &scope); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid assignment", 500)
+			return
+		}
+		if scope.SnapshotID == groups[0].SnapshotID {
+			args, _ := json.Marshal(map[string]string{"snapshotID": scope.SnapshotID, "id": "missing-document"})
+			qualityAgentAnswer(w, qualityAgentCall("stalled", "review_document", string(args)))
+			return
+		}
+		// The stalled worker must take queued work before the other workers
+		// can finish. A global fail-fast cancellation loses all five reviews.
+		if scope.SnapshotID == groups[4].SnapshotID {
+			unblock()
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		last := request.Messages[len(request.Messages)-1]
+		if last.Role == "system" {
+			args, _ := json.Marshal(map[string]any{"snapshotID": scope.SnapshotID, "fileID": "test", "startLine": 3, "endLine": 3})
+			qualityAgentAnswer(w, qualityAgentCall("source", "review_source", string(args)))
+		} else if strings.Contains(last.Content, `"recorded":true`) {
+			if request.Messages[len(request.Messages)-2].ToolCalls[0].Function.Name == "record_group" {
+				qualityAgentAnswer(w)
+			} else {
+				args, _ := json.Marshal(map[string]any{
+					"snapshotID": scope.SnapshotID, "fileID": "test", "startLine": 3, "endLine": 3,
+					"behaviorAdequacy": 2, "conditionAdequacy": 2, "rationale": "Collective review of this package.",
+				})
+				qualityAgentAnswer(w, qualityAgentCall("group", "record_group", string(args)))
+			}
+		} else {
+			args, _ := json.Marshal(map[string]any{
+				"snapshotID": scope.SnapshotID, "symbolID": scope.Tests[0].SymbolID,
+				"fileID": "test", "startLine": 3, "endLine": 3,
+				"craftsmanship": 3, "assertionStrength": 2, "rationale": "Checks the return value.",
+			})
+			qualityAgentAnswer(w, qualityAgentCall("record", "record_test", string(args)))
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	job := &qualityJob{data: a, cancel: cancel, done: make(chan struct{})}
+	go s.runAgentQuality(ctx, job, nil, cfg)
+	defer func() { unblock(); job.cancel(); <-job.done }()
+	select {
+	case <-job.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stalled investigation blocked queued groups")
+	}
+	saved, err := s.qualityStore.Load(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scored := 0
+	for _, item := range saved.Items {
+		if item.Status == testquality.StatusScored {
+			scored++
+		}
+	}
+	if saved.Status != "partial" || scored != 5 || !strings.Contains(saved.Error, "review_document") ||
+		!strings.Contains(saved.Error, "missing-document") || strings.Contains(saved.Error, context.Canceled.Error()) {
+		t.Fatalf("local stall cancelled or hid independent work: status=%s scored=%d error=%s", saved.Status, scored, saved.Error)
+	}
+	if saved.Suite == nil || len(saved.Suite.Groups) != 5 || saved.Suite.Status != testquality.StatusScored {
+		t.Fatalf("local stall prevented independent synthesis: %+v", saved.Suite)
+	}
+}
 
 func TestQualityAgentRecordsResultsBeforeFinishing(t *testing.T) {
 	identity := make(chan testquality.Identity, 1)

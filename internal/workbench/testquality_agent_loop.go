@@ -10,6 +10,13 @@ import (
 	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
+// Investigation limits stop one scope, not unrelated package reviews. Provider
+// and persistence errors remain job-wide failures.
+type qualityAgentScopeError struct{ err error }
+
+func (e *qualityAgentScopeError) Error() string { return e.err.Error() }
+func (e *qualityAgentScopeError) Unwrap() error { return e.err }
+
 // runQualityAgent owns one investigation's conversation and inspected citations.
 // Records are committed synchronously, including interleaved individual and
 // collective judgments; the caller validates and persists each proposal.
@@ -111,7 +118,7 @@ func runQualityAgent(ctx context.Context, cfg intelligence.Config, prompt string
 			return err
 		}
 		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
-			return fmt.Errorf("test quality agent step budget exhausted; assessment remains partial")
+			return &qualityAgentScopeError{fmt.Errorf("test quality agent step budget exhausted; assessment remains partial")}
 		}
 		// Measure JSON escaping too. Compact only after saved progress so repeated
 		// evidence reads cannot endlessly discard themselves without a new record.
@@ -137,7 +144,7 @@ func runQualityAgent(ctx context.Context, cfg intelligence.Config, prompt string
 			}
 		}
 		if len(frame) > cfg.ContextLimit() {
-			return fmt.Errorf("test quality agent context budget exhausted (%d > %d bytes); assessment remains partial", len(frame), cfg.ContextLimit())
+			return &qualityAgentScopeError{fmt.Errorf("test quality agent context budget exhausted (%d > %d bytes); assessment remains partial", len(frame), cfg.ContextLimit())}
 		}
 		if err := trace(testquality.ReviewTrace{Kind: "request", Step: step + 1, Messages: append([]intelligence.Message(nil), messages...), Tools: append([]intelligence.Tool(nil), tools...)}); err != nil {
 			return err
@@ -234,7 +241,11 @@ func runQualityAgent(ctx context.Context, cfg intelligence.Config, prompt string
 				return err
 			}
 			if repeatedReads > 1 {
-				return fmt.Errorf("test quality agent repeated unchanged %s without progress; completed judgments retained", name)
+				err := fmt.Errorf("test quality agent repeated unchanged %s with arguments %s without progress; completed judgments retained", name, args)
+				if toolErr != nil {
+					err = fmt.Errorf("%w; last tool error: %w", err, toolErr)
+				}
+				return &qualityAgentScopeError{err}
 			}
 			messages = append(messages, intelligence.Message{Role: "tool", ToolCallID: call.ID, Content: string(data)})
 			if repeatedRead {

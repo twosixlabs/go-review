@@ -1,12 +1,14 @@
 // Read-only diagnosis of saved Test Quality progress and failure reasons.
-// Args: ARCHIVE_DIRECTORY. Never loads reports, contacts models, or starts work.
+// Args: ARCHIVE_DIRECTORY [documents]. Reports load only for document metadata;
+// never contacts models or starts work.
 'use strict';
 const fs=require('node:fs/promises');
 const path=require('node:path');
 
 async function main() {
-  const [directory]=process.argv.slice(2);
+  const [directory,mode]=process.argv.slice(2);
   if(!directory)throw Error('ARCHIVE_DIRECTORY is required');
+  if(mode&&mode!=='documents')throw Error('Unknown diagnosis mode');
   const assessments=[];
   for(const entry of await fs.readdir(directory,{withFileTypes:true})) {
     if(!entry.isDirectory()||entry.name.startsWith('.'))continue;
@@ -25,6 +27,17 @@ async function main() {
   const selected=assessments.find(a=>a.metadata.status==='running')||assessments[0];
   if(!selected)throw Error('No saved assessments found');
   const {metadata:a,archive}=selected;
+  if(mode==='documents') {
+    for(const ref of archive.reports||[]) {
+      if(typeof ref.path!=='string'||path.basename(ref.path)!==ref.path)
+        throw Error('Invalid pinned report path');
+      const pinned=JSON.parse(await fs.readFile(path.join(selected.directory,ref.path),'utf8'));
+      console.log(JSON.stringify({snapshotID:pinned.snapshotID,module:pinned.report.module,
+        documents:(pinned.report.documents||[]).map(d=>({id:d.id,path:d.path,characters:Array.from(d.text||'').length})),
+        entrySources:(pinned.report.entryPoints?.sources||[]).map(d=>({id:d.id,path:d.path,characters:Array.from(d.text||'').length}))
+      },null,2));
+    }
+  }
   const diagnostics=[];
   for(const ref of archive.diagnostics||[]) {
     if(typeof ref.path!=='string'||path.basename(ref.path)!==ref.path)
@@ -51,7 +64,7 @@ async function main() {
   }
   console.log(JSON.stringify({
     selected:a.id,phase:a.phase,createdAt:a.createdAt,updatedAt:a.updatedAt,
-    error:a.error,analysis:a.analysis,review:a.review,persistence:a.persistence,
+    error:a.error,activity:a.activity,analysis:a.analysis,review:a.review,persistence:a.persistence,
     phaseMillis:a.phaseMillis,policy:a.policy,diagnosticReason:a.diagnosticReason,
     counts,reasons:[...reasons].map(([reason,count])=>({count,reason})),samples,
     diagnostics

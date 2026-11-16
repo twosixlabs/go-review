@@ -104,6 +104,21 @@ func TestQualityAgentLoopDetectsUnchangedReadStalls(t *testing.T) {
 	}
 }
 
+func TestQualityAgentLoopStallRetainsToolFailureDetails(t *testing.T) {
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, _ qualityAgentRequest) {
+		qualityAgentAnswer(w, qualityAgentCall("read", "review_source", `{"fileID":"missing-file"}`))
+	})
+	options := qualityAgentOptions()
+	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		return nil, nil, errors.New("Unknown retained file ID: missing-file")
+	}
+	err := runQualityAgent(t.Context(), cfg, "Review.", options, nil)
+	if err == nil || !strings.Contains(err.Error(), `"fileID":"missing-file"`) ||
+		!strings.Contains(err.Error(), "Unknown retained file ID") {
+		t.Fatalf("stall hid the evidence failure and its arguments: %v", err)
+	}
+}
+
 func TestQualityAgentLoopRecordsInterleavedWithInspectedEvidence(t *testing.T) {
 	citation := testquality.Citation{SnapshotID: "snapshot", FileID: "file", StartLine: 3, EndLine: 8}
 	var recorded []string

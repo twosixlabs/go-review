@@ -150,6 +150,12 @@ async function qualityOverview() {
   const expanded=parent.dataset.assessment===id?[...parent.children].filter(child=>child.tagName==='SECTION'):[];
   const detailsOpen=parent.dataset.assessment===id&&!!parent.querySelector('.quality-assessment-details')?.open;
   parent.replaceChildren();parent.dataset.assessment=id;
+  if(data.activity) {
+    const activity=el('div',undefined,parent,'quality-activity');
+    activity.setAttribute('role','status');
+    el('strong','Agent activity',activity);
+    el('p',data.activity,activity);
+  }
   const metrics=el('div',undefined,parent,'quality-metrics');
   const gauge=(label,value)=>{
     const meter=el('div',undefined,metrics,'metric-gauge');
@@ -166,7 +172,6 @@ async function qualityOverview() {
   };
   gauge('Individual tests',data.summary?.score);
   for(const [name,value] of Object.entries(data.categories||{}))gauge(name.replaceAll('-',' '),value);
-  if(data.activity)el('p',data.activity,parent,'quality-activity');
   const details=el('details',undefined,parent,'quality-assessment-details');
   details.open=detailsOpen;
   el('summary','Assessment details',details);
