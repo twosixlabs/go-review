@@ -216,7 +216,7 @@ running:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Status != "completed" || saved.Suite == nil || len(saved.Suite.Groups) != 3 {
+	if saved.Status != "completed" || saved.Suite == nil || saved.Suite.Status != testquality.StatusScored {
 		t.Fatalf("mixed review did not complete: %s %s", saved.Status, saved.Error)
 	}
 	for _, item := range saved.Items {
@@ -242,6 +242,182 @@ running:
 		t.Fatal(err)
 	}
 	t.Logf("completed requests=%d groups=%d", saved.Review.Requests, len(saved.Suite.Groups))
+}
+
+func TestQualityAgentLiveDelegation(t *testing.T) {
+	cfg, directory, _, _ := qualityExerciseProvider(t, "delegation")
+	report := qualityExerciseProject(t, map[string]string{
+		"sample.go":      "package qualitylive\nfunc Value() int {return 1}\n",
+		"sample_test.go": "package qualitylive\nimport \"testing\"\nfunc TestValue(t *testing.T) {if Value()!=1 {t.Fatal(\"wrong value\")}}\n",
+	}, []review.UnitTestSelection{{Package: "qualitylive", Tests: []string{"TestValue"}}})
+	server := New(report)
+	server.qualityStore = testquality.Store{Directory: filepath.Join(directory, "archive")}
+	a, err := server.qualityStore.Create(t.Context(), &review.RepositoryReview{Root: report.Root, Modules: []review.ReviewedModule{{Report: report}}}, cfg.BaseURL, cfg.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Policy = testquality.DefaultDiagnosticPolicy(false)
+	a.Status, a.Phase = "running", "reviewing"
+	if err := server.qualityStore.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	p, err := newQualityPrimary(ctx, server, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	trace, err := os.CreateTemp(directory, "primary-tools-*.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trace.Close()
+	delegated, readReport, finished := false, false, false
+	options := p.options
+	originalTrace := options.Trace
+	options.Trace = func(event testquality.ReviewTrace) error {
+		if err := originalTrace(event); err != nil {
+			return err
+		}
+		if err := json.NewEncoder(trace).Encode(event); err != nil {
+			return err
+		}
+		if event.Kind == "tool" {
+			switch event.Tool {
+			case "delegate_review":
+				delegated = delegated || event.Error == ""
+			case "read_review_agent":
+				readReport = readReport || event.Error == "" && strings.Contains(string(event.Result), `"status":"completed"`)
+			case "finish_review":
+				finished = finished || event.Error == ""
+			}
+		}
+		return nil
+	}
+	scope, err := json.Marshal(map[string]any{"snapshots": p.snapshots(), "testCount": len(p.items), "policy": a.Policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := qualityPrimaryPrompt + string(scope) + `
+For this bounded acceptance exercise, delegate TestValue's individual assessment to one child,
+read its completed report and evaluate the result.
+Inspect source yourself for the project collective judgment and finish the review. Do not execute fresh tests.`
+	if err := runQualityAgent(ctx, cfg, prompt, options, func(name string, args json.RawMessage, seen []testquality.Citation) error {
+		return p.record(p.items, true, name, args, seen)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.close()
+	saved, err := server.qualityStore.Load(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !delegated || !readReport || !finished || saved.Items[0].Status != testquality.StatusScored || saved.Suite == nil || saved.Suite.Status != testquality.StatusScored || len(saved.Diagnostics) != 0 {
+		t.Fatalf("primary did not complete the delegated exercise: delegated=%v read-report=%v finished=%v", delegated, readReport, finished)
+	}
+	t.Logf("assessment=%s delegated=true read-completed-report=true project-synthesis-saved=true explicit-finish=true", saved.ID)
+}
+
+func TestQualityAgentLiveDiscovery(t *testing.T) {
+	cfg, directory, requests, _ := qualityExerciseProvider(t, "discovery")
+	report := qualityExerciseProject(t, map[string]string{
+		"clarification/normalize.go":      "package clarification\nimport \"strings\"\n// Normalize trims leading and trailing whitespace, preserving interior whitespace.\nfunc Normalize(s string) string {return strings.TrimSpace(s)}\n",
+		"clarification/normalize_test.go": "package clarification\nimport \"testing\"\nfunc TestTrim(t *testing.T) {if got:=Normalize(\"  a b  \");got!=\"a b\" {t.Fatal(got)}}\nfunc TestEmpty(t *testing.T) {if got:=Normalize(\" \\t \");got!=\"\" {t.Fatal(got)}}\n",
+		"other/other.go":                  "package other\nfunc Value() int {return 1}\n",
+		"other/other_test.go":             "package other\nimport \"testing\"\nfunc TestOther(t *testing.T) {if Value()!=1 {t.Fatal(\"wrong\")}}\n",
+	}, []review.UnitTestSelection{{Package: "qualitylive/clarification", Tests: []string{"TestTrim", "TestEmpty"}}})
+	if err := os.WriteFile(filepath.Join(report.Root, "clarification", "review-note.txt"), []byte("live-discovery-marker: cedar-42\nThis is live-only context, not retained grading evidence.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := New(report)
+	server.qualityStore = testquality.Store{Directory: filepath.Join(directory, "archive")}
+	a, err := server.qualityStore.Create(t.Context(), &review.RepositoryReview{Root: report.Root, Modules: []review.ReviewedModule{{Report: report}}}, cfg.BaseURL, cfg.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Policy = testquality.DefaultDiagnosticPolicy(false)
+	a.Status, a.Phase = "running", "reviewing"
+	if err := server.qualityStore.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	p, err := newQualityPrimary(ctx, server, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	scope, _ := json.Marshal(map[string]any{"snapshots": p.snapshots(), "testCount": len(p.items), "policy": a.Policy})
+	prompt := qualityPrimaryPrompt + string(scope) + `
+For this bounded acceptance exercise, delegate a focused investigation of
+package qualitylive/clarification. Ask the child to discover this package's selected test
+identities, inspect its retained test source and read live clarification/review-note.txt.
+The child should report the identities, findings and exact live marker. Read and evaluate
+its completed report. Complete the selected tests and project synthesis using pinned evidence.
+Keep the child's investigation focused on clarification. You may directly inspect
+other selected tests needed to finish the project. Do not execute fresh tests.`
+	if err := runQualityAgent(ctx, cfg, prompt, p.options, func(name string, args json.RawMessage, seen []testquality.Citation) error {
+		return p.record(p.items, true, name, args, seen)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.close()
+	beforeRead := requests.Load()
+	file, err := os.Open(filepath.Join(server.qualityStore.Directory, a.ID, "agent-events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	discovered, retainedRead, liveRead, reportedMarker := false, false, false, false
+	decoder := json.NewDecoder(file)
+	eventCount := 0
+	for {
+		var event testquality.AgentEvent
+		err := decoder.Decode(&event)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventCount++
+		if event.ParentID != "Lead" || event.Error != "" {
+			continue
+		}
+		if event.Kind == "message" && strings.Contains(event.Message, "cedar-42") {
+			reportedMarker = true
+		}
+		if event.Kind != "tool" {
+			continue
+		}
+		var args struct{ Source, Path, Package string }
+		if err := json.Unmarshal(event.Args, &args); err != nil {
+			t.Fatal(err)
+		}
+		if event.Tool == "review_tests" && args.Package == "qualitylive/clarification" {
+			discovered = true
+		}
+		if event.Tool == "review_source" || event.Tool == "review_read_file" && args.Source != "live" {
+			retainedRead = true
+		}
+		if event.Tool == "review_read_file" && args.Source == "live" && args.Path == "clarification/review-note.txt" {
+			liveRead = true
+		}
+	}
+	saved, err := server.qualityStore.Load(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range saved.Items {
+		if item.Status != testquality.StatusScored {
+			t.Fatalf("selected test unfinished: %s", item.Name)
+		}
+	}
+	if !discovered || !retainedRead || !liveRead || !reportedMarker || saved.Suite == nil || saved.Suite.Status != testquality.StatusScored || len(saved.Diagnostics) != 0 || requests.Load() != beforeRead {
+		t.Fatalf("discovery incomplete: selected=%v retained=%v live=%v marker=%v suite=%v", discovered, retainedRead, liveRead, reportedMarker, saved.Suite != nil)
+	}
+	t.Logf("assessment=%s selected-tests=%d events=%d requests=%d child-discovery=true retained-source=true live-marker=true synthesis-saved=true", a.ID, len(saved.Items), eventCount, beforeRead)
 }
 
 func TestQualityAgentLiveDiagnostic(t *testing.T) {

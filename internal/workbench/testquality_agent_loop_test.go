@@ -66,6 +66,81 @@ func qualityAgentOptions() testquality.JudgmentOptions {
 const qualityAgentTestArgs = `{"snapshotID":"snapshot","symbolID":"test","craftsmanship":3,"assertionStrength":2,"rationale":"Checks the return value.","fileID":"file","startLine":3,"endLine":4,"findingTitle":"Missing error check","findingRationale":"Errors can pass unnoticed.","findingSuggestion":"Assert the returned error.","additionalEvidence":[{"snapshotID":"snapshot","fileID":"file","startLine":7,"endLine":8}]}`
 const qualityAgentGroupArgs = `{"snapshotID":"snapshot","behaviorAdequacy":1,"conditionAdequacy":4,"rationale":"Independent collective judgment.","fileID":"file","startLine":3,"endLine":4}`
 
+func TestQualityAgentLoopRequiresExplicitFinishInSameConversation(t *testing.T) {
+	requests, records := 0, 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		requests++
+		switch requests {
+		case 1:
+			qualityAgentAnswer(w, qualityAgentCall("early", "finish_review", `{}`))
+		case 2:
+			last := request.Messages[len(request.Messages)-1]
+			if last.Role != "tool" || !strings.Contains(last.Content, "individual and collective") {
+				t.Errorf("missing actionable completion rejection: %+v", last)
+			}
+			qualityAgentAnswer(w, qualityAgentCall("source", "review_source", `{}`), qualityAgentCall("test", "record_test", qualityAgentTestArgs))
+		case 3:
+			qualityAgentAnswer(w)
+		case 4:
+			if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "finish_review") {
+				t.Error("ordinary text was allowed to end the primary review")
+			}
+			if len(request.Messages) < 7 || request.Messages[0].Content != "Own the review." {
+				t.Error("completion retry replaced the primary conversation")
+			}
+			qualityAgentAnswer(w, qualityAgentCall("group", "record_group", qualityAgentGroupArgs))
+		default:
+			qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+		}
+	})
+	cfg.MaxSteps = 6
+	options := qualityAgentOptions()
+	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		return json.RawMessage(`{"source":"inspected"}`), []testquality.Citation{{SnapshotID: "snapshot", FileID: "file", StartLine: 3, EndLine: 8}}, nil
+	}
+	options.Finish = func() error {
+		if records != 2 {
+			return errors.New("record the missing individual and collective assessments")
+		}
+		return nil
+	}
+	err := runQualityAgent(t.Context(), cfg, "Own the review.", options, func(_ string, _ json.RawMessage, seen []testquality.Citation) error {
+		if len(seen) != 1 {
+			t.Error("completion rejection lost inspected evidence")
+		}
+		records++
+		return nil
+	})
+	if err != nil || requests != 5 || records != 2 {
+		t.Fatalf("primary completion: requests=%d records=%d error=%v", requests, records, err)
+	}
+}
+
+func TestQualityAgentLoopPrimaryCanRecoverFromReadStall(t *testing.T) {
+	var requests int
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		requests++
+		if requests < 4 {
+			qualityAgentAnswer(w, qualityAgentCall("read", "review_source", `{}`))
+		} else {
+			last := request.Messages[len(request.Messages)-1]
+			if !strings.Contains(last.Content, "unchanged") {
+				t.Errorf("primary did not receive stall feedback: %+v", last)
+			}
+			qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+		}
+	})
+	options := qualityAgentOptions()
+	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		return json.RawMessage(`{}`), nil, errors.New("Unknown document")
+	}
+	options.Finish = func() error { return nil }
+	err := runQualityAgent(t.Context(), cfg, "Own the review.", options, nil)
+	if err != nil || requests != 4 {
+		t.Fatalf("primary could not recover its investigation: requests=%d error=%v", requests, err)
+	}
+}
+
 func TestQualityAgentLoopDetectsUnchangedReadStalls(t *testing.T) {
 	for _, mode := range []string{"recover", "stop", "changing"} {
 		t.Run(mode, func(t *testing.T) {
@@ -426,13 +501,13 @@ func TestQualityAgentLoopTracesReadableProgress(t *testing.T) {
 			return nil
 		},
 	}, nil)
-	if err != nil || len(kinds) == 0 || kinds[0] != "request" || strings.Join(progress, ",") != "Finished." {
+	if err != nil || len(kinds) == 0 || kinds[0] != "start" || kinds[len(kinds)-1] != "end" || strings.Join(progress, ",") != "Finished." {
 		t.Fatalf("readable progress missing: kinds=%v progress=%v error=%v", kinds, progress, err)
 	}
 }
 
 func TestQualityAgentLoopPropagatesTraceErrors(t *testing.T) {
-	for _, kind := range []string{"request", "message", "tool"} {
+	for _, kind := range []string{"start", "request", "message", "tool", "end"} {
 		t.Run(kind, func(t *testing.T) {
 			var requests, records int
 			cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, _ qualityAgentRequest) {
@@ -456,7 +531,7 @@ func TestQualityAgentLoopPropagatesTraceErrors(t *testing.T) {
 				return nil
 			})
 			wantRequests, wantRecords := 1, 0
-			if kind == "request" {
+			if kind == "request" || kind == "start" {
 				wantRequests = 0
 			}
 			if kind == "tool" {
@@ -478,6 +553,7 @@ func TestQualityAgentLoopCompactsSavedRecordsAndRequiresEvidenceReread(t *testin
 		switch requests {
 		case 1:
 			qualityAgentAnswer(w,
+				qualityAgentCall("delegate", "delegate_review", `{"instructions":"Investigate the related helper."}`),
 				qualityAgentCall("read", "review_source", `{}`),
 				qualityAgentCall("test", "record_test", qualityAgentTestArgs),
 				qualityAgentCall("group", "record_group", qualityAgentGroupArgs))
@@ -493,7 +569,7 @@ func TestQualityAgentLoopCompactsSavedRecordsAndRequiresEvidenceReread(t *testin
 				content.WriteString(message.Content)
 			}
 			text := content.String()
-			for _, want := range []string{"compacted", "saved", "record_test", "record_group", "Checks the return value.", "Independent collective judgment."} {
+			for _, want := range []string{"compacted", "saved", "record_test", "record_group", "Checks the return value.", "Independent collective judgment.", "chosen-child", "Investigate the related helper."} {
 				if !strings.Contains(text, want) {
 					t.Errorf("compaction omitted %q", want)
 				}
@@ -514,7 +590,11 @@ func TestQualityAgentLoopCompactsSavedRecordsAndRequiresEvidenceReread(t *testin
 	})
 	cfg.ContextBytes = 32768
 	options := qualityAgentOptions()
-	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+	options.Tools = append(options.Tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "delegate_review", Parameters: json.RawMessage(`{"type":"object"}`)}})
+	options.Read = func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		if name == "delegate_review" {
+			return json.RawMessage(`{"agentID":"chosen-child","status":"running"}`), nil, nil
+		}
 		reads++
 		text := "re-read source"
 		if reads == 1 {

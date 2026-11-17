@@ -5,6 +5,171 @@ const path=require('node:path');
 const vm=require('node:vm');
 const {JSDOM}=require('jsdom');
 
+function qualityHistoryFixture(t) {
+  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090'});
+  t.after(()=>dom.window.close());
+  const events=[],requests=[];
+  let gate=null,failure=null,available=true;
+  const summary={counts:{scored:1}};
+  dom.window.fetch=async(url,options)=>{
+    const args=options?.body?JSON.parse(options.body):{};
+    requests.push({url,args});
+    let value={};
+    if(url==='/api/snapshot')return {ok:false,json:async()=>({error:'No exploration snapshot in this fixture.'})};
+    if(url==='/api/chat/status')value={enabled:true,external:false};
+    else if(url==='/api/test-quality/status')value={assessments:[{id:'saved',status:'completed',summary}]};
+    else if(args.operation==='overview')value={assessmentID:args.assessmentID,status:'completed',summary,categories:{}};
+    else if(args.operation==='events') {
+      const waiting=gate;gate=null;
+      if(failure)return {ok:false,json:async()=>({error:failure})};
+      const rows=events.filter(event=>event.offset>=(args.offset||0)).slice(0,3);
+      const totalBytes=events.at(-1)?.end||0;
+      value={available,reason:available?undefined:'No agent history was recorded for this assessment.',items:available?rows.map(({event,offset})=>({
+        offset,agentID:event.agentID,parentID:event.parentID||'',kind:event.kind,time:event.time,
+        tool:event.tool||'',step:event.step||0,status:event.status||'',
+        messagePreview:[...(event.message||'')].slice(0,250).join(''),errorPreview:event.error||'',
+        argsBytes:event.args?Buffer.byteLength(JSON.stringify(event.args)):0,resultBytes:event.result?Buffer.byteLength(JSON.stringify(event.result)):0
+      })):[],nextOffset:available&&rows.length&&rows.at(-1).end<totalBytes?rows.at(-1).end:null,offsetUnit:'bytes',totalBytes};
+      if(waiting)await waiting;
+    } else if(args.operation==='event') {
+      const record=events.find(event=>event.offset===args.offset);
+      assert.ok(record,'event detail cursor must be an actual byte boundary');
+      const text=[...JSON.stringify(record.event)],offset=args.textOffset||0,end=Math.min(text.length,offset+1000);
+      value={eventOffset:args.offset,text:text.slice(offset,end).join(''),textPage:{offset,nextOffset:end<text.length?end:null,total:text.length}};
+    } else if(['tests','modules'].includes(args.operation))value={items:[],nextOffset:null};
+    return {ok:true,json:async()=>value};
+  };
+  const ctx=dom.getInternalVMContext();
+  for(const match of html.matchAll(/<script src="\/([^"]+)"><\/script>/g))
+    vm.runInContext(fs.readFileSync(path.join(__dirname,match[1]),'utf8'),ctx,{filename:match[1]});
+  return {
+    document:dom.window.document,window:dom.window,requests,
+    run:code=>vm.runInContext(code,ctx),
+    append(event) {
+      const offset=events.at(-1)?.end||0;
+      const entry={time:'2026-11-17T03:08:15Z',agentID:'Lead',...event};
+      events.push({offset,end:offset+Buffer.byteLength(JSON.stringify(entry)+'\n'),event:entry});
+    },
+    delay(promise){gate=promise;},fail(error){failure=error;},available(value){available=value;}
+  };
+}
+
+test('agent conversation restores full responses safely and appends without duplicates',async t=>{
+  const f=qualityHistoryFixture(t);
+  const full='Reviewed **assertions**. '+ 'λ'.repeat(1800)+' End of the retained response.';
+  f.append({kind:'start',args:{messages:[{content:'Private implementation prompt, not a chat response.'}]}});
+  f.append({kind:'message',message:full});
+  f.append({kind:'tool_call',tool:'review_source'});
+  f.append({kind:'tool',tool:'review_source',result:{text:'Large source body must not enter the timeline.'}});
+  f.append({kind:'message',agentID:'agent-1',parentID:'Lead',message:'Focused child findings. [unsafe](javascript:alert(1)) <img src=x onerror=alert(1)>'});
+  f.append({kind:'message',message:'\n\n'});
+  await f.run('qualityOpen()');
+  assert.ok(f.document.querySelector('#quality-history'),'agent conversation panel is missing');
+  await f.run('qualityHistoryRefresh()');
+  const messages=()=>[...f.document.querySelectorAll('.quality-history-message')];
+  assert.equal(messages().length,2);
+  assert.match(messages()[0].textContent,/End of the retained response/,'history used the truncated index preview');
+  assert.ok(messages()[0].querySelector('.quality-history-text strong'),'assistant Markdown was not rendered');
+  assert.match(messages()[1].textContent,/agent-1/);
+  assert.equal(f.document.querySelector('#quality-history img'),null,'agent content became executable HTML');
+  assert.equal(f.document.querySelector('#quality-history a[href^="javascript:"]'),null);
+  assert.doesNotMatch(f.document.querySelector('#quality-history').textContent,/Private implementation prompt|Large source body/,'raw prompts/tool results flooded the conversation');
+  const first=messages()[0];
+  const activity=f.document.querySelector('.quality-history-activity');
+  assert.ok(activity,'tool activity is inaccessible');
+  activity.open=true;
+  await f.run('qualityOverview()');
+  await f.run('qualityHistoryRefresh()');
+  assert.equal(messages()[0],first,'polling replaced an existing response');
+  assert.equal(activity.open,true,'polling collapsed activity being inspected');
+  const tool=[...f.document.querySelectorAll('.quality-history-activity .quality-history-entry')].find(entry=>/Returned.*review_source/s.test(entry.textContent));
+  await tool.querySelector('button').onclick();
+  assert.match(tool.querySelector('pre').textContent,/Large source body must not enter the timeline/,'explicit event inspection did not load the retained tool result');
+  f.append({kind:'message',message:'Next completed assessment saved.'});
+  await f.run('qualityHistoryRefresh()');
+  assert.equal(messages().length,3);
+  assert.equal(messages()[0],first);
+  const filter=f.document.querySelector('#quality-history-filter');
+  filter.value='Lead';filter.dispatchEvent(new f.window.Event('change'));
+  assert.equal(messages()[1].hidden,true,'lead-only filter retained child responses');
+  assert.equal(messages()[0].hidden,false);
+  filter.value='';filter.dispatchEvent(new f.window.Event('change'));
+  assert.equal(messages()[1].hidden,false);
+  f.run('qualityClose()');
+  await f.run('qualityOpen()');
+  await f.run('qualityHistoryRefresh()');
+  assert.equal(messages().length,3,'reopening duplicated retained responses');
+  assert.equal(messages()[0],first,'reopening discarded the loaded history');
+  let release;
+  f.delay(new Promise(resolve=>{release=resolve;}));
+  const pending=f.run('qualityHistoryRefresh()');
+  f.append({kind:'message',message:'Final response saved before the job completed.'});
+  await f.run('qualityPoll()');
+  release();await pending;
+  assert.equal(messages().length,4,'a completed job lost its final response behind an older in-flight history read');
+  assert.equal(f.requests.some(({url})=>/start|cancel|completions/.test(url)),false,'reading history launched or changed agent work');
+});
+
+test('agent conversation preserves reading position and follows only at the bottom',async t=>{
+  const f=qualityHistoryFixture(t);
+  f.append({kind:'message',message:'First response'});
+  await f.run('qualityOpen()');
+  assert.ok(f.document.querySelector('#quality-history'),'agent conversation panel is missing');
+  await f.run('qualityHistoryRefresh()');
+  const log=f.document.querySelector('#quality-history-log');
+  Object.defineProperties(log,{
+    clientHeight:{value:200,configurable:true},
+    scrollHeight:{get:()=>800+log.querySelectorAll('.quality-history-message').length*200,configurable:true}
+  });
+  log.scrollTop=100;log.dispatchEvent(new f.window.Event('scroll'));
+  f.append({kind:'message',message:'New response while reading earlier messages'});
+  await f.run('qualityHistoryRefresh()');
+  assert.equal(log.scrollTop,100,'new response stole the reading position');
+  const jump=f.document.querySelector('#quality-history-latest');
+  assert.equal(jump.hidden,false,'there is no way to jump to new responses');
+  jump.click();
+  assert.ok(log.scrollTop>=1000);
+  assert.equal(jump.hidden,true);
+  log.scrollTop=1000;log.dispatchEvent(new f.window.Event('scroll'));
+  f.append({kind:'message',message:'Response while following live'});
+  await f.run('qualityHistoryRefresh()');
+  assert.ok(log.scrollTop>=1200,'following stopped despite being at the bottom');
+});
+
+test('agent conversation rejects old-assessment replies and exposes unavailable history and failures',async t=>{
+  const f=qualityHistoryFixture(t);
+  await f.run('qualityOpen()');
+  assert.ok(f.document.querySelector('#quality-history'),'agent conversation panel is missing');
+  await f.run('qualityHistoryRefresh()');
+  assert.match(f.document.querySelector('#quality-history-status').textContent,/no.*responses|waiting/i);
+  f.append({kind:'message',message:'Belongs to the original assessment'});
+  let release;
+  f.delay(new Promise(resolve=>{release=resolve;}));
+  const old=f.run('qualityHistoryRefresh()');
+  f.available(false);
+  await f.run("qualityState.id='older';qualityHistoryRefresh()");
+  release();await old;
+  assert.doesNotMatch(f.document.querySelector('#quality-history-log').textContent,/Belongs to the original/,'stale response crossed assessment boundaries');
+  assert.match(f.document.querySelector('#quality-history-status').textContent,/No agent history was recorded/);
+  f.available(true);f.fail('History disk read failed');
+  await f.run('qualityHistoryRefresh()');
+  assert.match(f.document.querySelector('#quality-history-status').textContent,/History disk read failed/,'read failure was hidden as empty history');
+  f.fail(null);
+  await f.run('qualityHistoryRefresh()');
+  assert.match(f.document.querySelector('#quality-history-log').textContent,/Belongs to the original/,'failed cursor was not retried');
+  f.append({kind:'tool',tool:'review_source',error:'The retained file is unavailable'});
+  await f.run('qualityHistoryRefresh()');
+  const activity=[...f.document.querySelectorAll('.quality-history-activity')].at(-1);
+  assert.match(activity.querySelector('summary').textContent,/error/i,'tool failure is invisible while activity is collapsed');
+  assert.match(activity.textContent,/The retained file is unavailable/);
+  f.fail('History disk read failed again');
+  await f.run('qualityHistoryRefresh()');
+  await f.run('qualityState.id=null;qualityHistoryRefresh()');
+  assert.equal(f.document.querySelector('#quality-history-status').classList.contains('error'),false,'a cleared assessment retained the previous history error');
+  assert.equal(f.document.querySelector('#quality-history-retry').hidden,true);
+});
+
 test('Test Quality launches explicitly, retains background context and drills into actual cited source',async()=>{
   const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
   const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090'});

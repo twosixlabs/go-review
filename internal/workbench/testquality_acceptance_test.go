@@ -22,54 +22,45 @@ type qualityFixtureRequest struct {
 	Tools    []intelligence.Tool    `json:"tools"`
 }
 
-type qualityFixtureScope struct {
-	SnapshotID string                        `json:"snapshotID"`
-	Module     string                        `json:"module"`
-	Package    string                        `json:"package"`
-	Tests      []qualityFixtureItem          `json:"tests"`
-	Groups     []testquality.GroupAssessment `json:"groups"`
-}
-
-type qualityFixtureItem struct {
-	SymbolID  string `json:"symbolID"`
-	Name      string `json:"name"`
-	FileID    string `json:"fileID"`
-	StartLine int    `json:"startLine"`
-	EndLine   int    `json:"endLine"`
-}
-
-func (scope qualityFixtureScope) item(entry qualityFixtureItem) testquality.Responsibility {
-	return testquality.Responsibility{
-		Identity:    testquality.Identity{SnapshotID: scope.SnapshotID, Module: scope.Module, SymbolID: entry.SymbolID},
-		Name:        entry.Name,
-		Package:     scope.Package,
-		Declaration: testquality.Citation{SnapshotID: scope.SnapshotID, FileID: entry.FileID, StartLine: entry.StartLine, EndLine: entry.EndLine},
-	}
-}
-
-func qualityFixtureDecode(t *testing.T, r *http.Request) (qualityFixtureRequest, qualityFixtureScope, bool) {
+func qualityFixtureDecode(t *testing.T, r *http.Request) (qualityFixtureRequest, []testquality.Responsibility, *int) {
 	t.Helper()
 	var request qualityFixtureRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		t.Error(err)
-		return request, qualityFixtureScope{}, false
+		return request, nil, nil
 	}
 	if len(request.Messages) == 0 || request.Messages[0].Role != "system" {
-		t.Error("agent did not supply its assigned scope in a system message")
-		return request, qualityFixtureScope{}, false
+		t.Error("primary did not retain its instructions")
+		return request, nil, nil
 	}
-	text := request.Messages[0].Content
-	for i := range text {
-		if text[i] != '{' {
+	var items []testquality.Responsibility
+	var next *int
+	for _, message := range request.Messages {
+		if message.Role != "tool" {
 			continue
 		}
-		var scope qualityFixtureScope
-		if json.Unmarshal([]byte(text[i:]), &scope) == nil && (len(scope.Tests) != 0 || len(scope.Groups) != 0) {
-			return request, scope, true
+		var page struct {
+			Items      []testquality.Responsibility `json:"items"`
+			NextOffset *int                         `json:"nextOffset"`
+		}
+		if json.Unmarshal([]byte(message.Content), &page) == nil && len(page.Items) > 0 && page.Items[0].Identity.SnapshotID != "" {
+			items = append(items, page.Items...)
+			next = page.NextOffset
 		}
 	}
-	t.Errorf("missing assigned group or synthesis scope: %s", text)
-	return request, qualityFixtureScope{}, false
+	return request, items, next
+}
+
+func qualityFixtureCallCount(request qualityFixtureRequest, name string) int {
+	count := 0
+	for _, message := range request.Messages {
+		for _, call := range message.ToolCalls {
+			if call.Function.Name == name {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 type qualityFixtureCall struct {
@@ -114,6 +105,7 @@ func qualityFixtureTest(item testquality.Responsibility, craft, assertion int, r
 
 func qualityFixtureGroup(c testquality.Citation, rationale string) qualityFixtureCall {
 	return qualityFixtureCall{"record_group", map[string]any{
+		"scope":      "project",
 		"snapshotID": c.SnapshotID, "behaviorAdequacy": 2, "conditionAdequacy": 2,
 		"rationale": rationale, "fileID": c.FileID, "startLine": c.StartLine, "endLine": c.EndLine,
 	}}
@@ -128,35 +120,23 @@ func TestQualityEndToEndProviderSavedHTTPMCPAndChat(t *testing.T) {
 	var snapshot atomic.Value
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		request, scope, ok := qualityFixtureDecode(t, r)
-		if !ok {
-			http.Error(w, "invalid scope", http.StatusBadRequest)
-			return
-		}
+		request, items, _ := qualityFixtureDecode(t, r)
 		qualityFixtureCheckTools(t, request)
-		if len(scope.Groups) != 0 {
-			c := testquality.Citation{SnapshotID: scope.Groups[0].SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
-			switch len(request.Messages) {
-			case 1:
-				qualityFixtureRespond(w, qualityFixtureRead(c))
-			case 3:
-				qualityFixtureRespond(w, qualityFixtureGroup(c, "The combined tests check the return value."))
-			default:
-				qualityFixtureRespond(w)
-			}
+		if len(items) == 0 {
+			qualityFixtureRespond(w, qualityFixtureCall{"review_progress", map[string]string{"operation": "tests"}})
 			return
 		}
-		item := scope.item(scope.Tests[0])
+		item := items[0]
 		snapshot.Store(item.Identity.SnapshotID)
 		if item.Name != "TestF" {
 			t.Error("assessment must target the retained test")
 		}
 		production := testquality.Citation{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
-		switch len(request.Messages) {
-		case 1:
+		switch {
+		case qualityFixtureCallCount(request, "review_source") == 0:
 			qualityFixtureRespond(w, qualityFixtureRead(item.Declaration), qualityFixtureRead(production))
-		case 4:
-			if !strings.Contains(request.Messages[2].Content, "t.Fatal") || !strings.Contains(request.Messages[3].Content, "return 1") {
+		case qualityFixtureCallCount(request, "record_test") == 0:
+			if !strings.Contains(request.Messages[len(request.Messages)-2].Content, "t.Fatal") || !strings.Contains(request.Messages[len(request.Messages)-1].Content, "return 1") {
 				t.Error("test and production source were not available")
 			}
 			record := qualityFixtureTest(item, 2, 2, "One meaningful return-value assertion; limited case diversity.")
@@ -165,7 +145,7 @@ func TestQualityEndToEndProviderSavedHTTPMCPAndChat(t *testing.T) {
 			record.args.(map[string]any)["findingSuggestion"] = "Review relevant contract variations."
 			qualityFixtureRespond(w, record, qualityFixtureGroup(production, "One case checks the return value."))
 		default:
-			qualityFixtureRespond(w)
+			qualityFixtureRespond(w, qualityFixtureCall{"finish_review", map[string]any{}})
 		}
 	}))
 	defer provider.Close()

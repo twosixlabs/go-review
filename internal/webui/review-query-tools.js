@@ -370,8 +370,8 @@
         ...[...(report.documents||[]),...(report.entryPoints?.sources||[])].filter(d=>(d.path+'\n'+d.text).toLowerCase().includes(q))
           .map(d=>({kind:'document',id:d.id,path:d.path})),
         ...(report.testSources||[]).flatMap(t=>(t.declarations||[]).filter(d=>
-          (d.name+'\n'+t.file.source).toLowerCase().includes(q)).map(d=>
-          ({kind:'test',id:d.id,name:d.name,location:d.location})))];
+          (d.name+'\n'+t.file.package+'\n'+t.file.path+'\n'+t.file.source).toLowerCase().includes(q)).map(d=>
+          ({kind:'test',id:d.id,name:d.name,package:t.file.package,path:t.file.path,location:d.location})))];
       return page(items,args);
     }
     if(operation==='logical') {
@@ -399,13 +399,18 @@
       const p=(report.packages||[]).find(p=>p.path===args.package);
       if(!p)throw Error('Unknown package: '+args.package);
       const symbols=(report.symbols||[]).filter(s=>s.package===p.path);
+      const testSources=(report.testSources||[]).filter(t=>t.file.package===p.path);
       const sections={symbols:()=>symbols.map(symbolSummary),imports:()=>p.imports||[],
         files:()=>(report.files||[]).filter(f=>f.package===p.path).map(({id,path,sha256})=>({id,path,sha256})),
+        testFiles:()=>testSources.map(t=>({id:t.file.id,path:t.file.path,sha256:t.file.sha256})),
+        tests:()=>testSources.flatMap(t=>(t.declarations||[]).map(d=>({...d,package:t.file.package,path:t.file.path}))),
         typeErrors:()=>p.typeErrors||[],maximumOwners:()=>visual.metrics(report,symbols.map(s=>s.id)).complexity.maximumSymbolIDs};
       if(args.section==='documentation')return textResult({package:p.path,text:p.doc||''},'text',args);
       if(args.section) {
         if(!sections[args.section])throw Error('Unknown package section: '+args.section);
-        return page(sections[args.section](),args);
+        const result=page(sections[args.section](),args);
+        if(args.section==='files')return {...result,sourceScope:'production',testFileCount:testSources.length};
+        return result;
       }
       return {package:packageSummary(report,p),symbols:page(symbols.map(symbolSummary),args),
         sections:[...Object.keys(sections),'documentation']};

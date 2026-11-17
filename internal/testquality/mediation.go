@@ -216,12 +216,16 @@ type JudgmentOptions struct {
 	Tools    []intelligence.Tool
 	Read     func(context.Context, string, json.RawMessage) (json.RawMessage, []Citation, error)
 	Trace    func(ReviewTrace) error
+	// Finish validates required deliverables. When set, the native primary
+	// conversation can end successfully only through finish_review.
+	Finish func() error
 	// The job owner checkpoints completed collective groups before synthesis.
 	CheckpointSuite func(SuiteAssessment) error
 }
 
 type ReviewTrace struct {
 	Kind     string                 `json:"kind"`
+	Status   string                 `json:"status,omitempty"`
 	Step     int                    `json:"step"`
 	Submit   string                 `json:"submit"`
 	Messages []intelligence.Message `json:"messages,omitempty"`

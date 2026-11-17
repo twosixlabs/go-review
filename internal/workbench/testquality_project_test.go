@@ -37,59 +37,62 @@ func TestQualityProjectAssessmentKeepsPartialMultiModuleJudgmentsAndAggregateCov
 		// This profile covers a run with multiple tests, not named-case paths.
 		UnitEvidence: &review.UnitEvidence{SourceSHA256: "worker-source", AllTests: true, Runs: []review.UnitTestRun{{Status: "pass", MatchedTests: []string{"TestPublish", "TestOther"}, Outcomes: map[string]string{"TestPublish": "pass", "TestOther": "pass"}}}}}
 	s.review.Modules = append(s.review.Modules, review.ReviewedModule{Report: worker})
-	exampleFinished := make(chan struct{})
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request, scope, ok := qualityFixtureDecode(t, r)
-		if !ok || len(scope.Tests) == 0 {
-			http.Error(w, "invalid worker scope", http.StatusBadRequest)
+		request, items, _ := qualityFixtureDecode(t, r)
+		qualityFixtureCheckTools(t, request)
+		if len(items) == 0 {
+			qualityFixtureRespond(w, qualityFixtureCall{"review_progress", map[string]string{"operation": "tests"}})
 			return
 		}
-		qualityFixtureCheckTools(t, request)
-		var item testquality.Responsibility
-		for _, entry := range scope.Tests {
-			selected := scope.item(entry)
-			switch selected.Name {
+		var selected []testquality.Responsibility
+		for _, item := range items {
+			switch item.Name {
 			case "TestF", "TestPublish":
-				item = selected
+				selected = append(selected, item)
 			case "TestBroken":
 			default:
-				t.Errorf("production function became an assessment target: %s", selected.Name)
+				t.Errorf("production function became an assessment target: %s", item.Name)
 			}
 		}
-		if item.Name == "" {
+		if len(selected) != 2 {
 			http.Error(w, "missing expected test", http.StatusBadRequest)
 			return
 		}
-		production := testquality.Citation{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
-		switch len(request.Messages) {
-		case 1:
-			qualityFixtureRespond(w, qualityFixtureRead(item.Declaration), qualityFixtureRead(production))
-		case 4:
-			craft, assertion := 2, 4
-			rationale := "The test checks the return value."
-			if item.Identity.Module == "worker" {
-				craft, assertion = 1, 0
-				rationale = "The mock is called and Publish's result is ignored; the empty input is not represented."
-				if !strings.Contains(request.Messages[2].Content, "mock") {
-					t.Error("mock/test source not investigated")
-				}
+		var calls []qualityFixtureCall
+		switch {
+		case qualityFixtureCallCount(request, "review_source") == 0:
+			for _, item := range selected {
+				production := testquality.Citation{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
+				calls = append(calls, qualityFixtureRead(item.Declaration), qualityFixtureRead(production))
 			}
-			qualityFixtureRespond(w, qualityFixtureTest(item, craft, assertion, rationale), qualityFixtureGroup(production, rationale))
+		case qualityFixtureCallCount(request, "record_test") == 0:
+			for _, item := range selected {
+				craft, assertion := 2, 4
+				rationale := "The test checks the return value."
+				if item.Identity.Module == "worker" {
+					craft, assertion = 1, 0
+					rationale = "The mock is called and Publish's result is ignored; the empty input is not represented."
+					found := false
+					for _, message := range request.Messages {
+						found = found || message.Role == "tool" && strings.Contains(message.Content, "mock")
+					}
+					if !found {
+						t.Error("mock/test source not investigated")
+					}
+				}
+				production := testquality.Citation{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2}
+				group := qualityFixtureGroup(production, rationale)
+				group.args.(map[string]any)["scope"], group.args.(map[string]any)["package"] = "package", item.Package
+				calls = append(calls, qualityFixtureTest(item, craft, assertion, rationale), group)
+			}
 		default:
-			if item.Identity.Module == "worker" {
-				select {
-				case <-exampleFinished:
-					http.Error(w, "fixture model failure", http.StatusServiceUnavailable)
-				case <-r.Context().Done():
-				}
-				return
-			}
-			close(exampleFinished)
-			qualityFixtureRespond(w)
+			http.Error(w, "fixture model failure", http.StatusServiceUnavailable)
+			return
 		}
+		qualityFixtureRespond(w, calls...)
 	}))
 	defer model.Close()
-	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: model.URL, Model: "project-fixture", MaxSteps: 3})
+	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: model.URL, Model: "project-fixture", MaxSteps: 4})
 	w := qualityRequest(t, s, "/api/test-quality/start", `{}`)
 	if w.Code != 202 {
 		t.Fatal(w.Body.String())

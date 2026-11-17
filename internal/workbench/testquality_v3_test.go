@@ -164,61 +164,67 @@ func TestQualityLargeJobPublishesCollectiveGroupsBeforeOverallSynthesis(t *testi
 		TestSources: []review.TestSource{tests, other}}
 	ready, release := make(chan struct{}), make(chan struct{})
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request, scope, ok := qualityFixtureDecode(t, r)
-		if !ok {
-			http.Error(w, "invalid scope", http.StatusBadRequest)
-			return
-		}
+		request, items, next := qualityFixtureDecode(t, r)
 		qualityFixtureCheckTools(t, request)
-		if len(scope.Groups) != 0 {
-			contract := testquality.Citation{SnapshotID: scope.Groups[0].SnapshotID, FileID: "production", StartLine: 2, EndLine: 2}
-			switch len(request.Messages) {
-			case 1:
-				close(ready)
-				select {
-				case <-release:
-				case <-r.Context().Done():
-					return
+		if len(items) == 0 || next != nil {
+			offset := 0
+			if next != nil {
+				offset = *next
+			}
+			qualityFixtureRespond(w, qualityFixtureCall{"review_progress", map[string]any{"operation": "tests", "offset": offset, "limit": 100}})
+			return
+		}
+		contract := testquality.Citation{SnapshotID: items[0].Identity.SnapshotID, FileID: "production", StartLine: 2, EndLine: 2}
+		if qualityFixtureCallCount(request, "review_source") == 0 {
+			spans := map[string]testquality.Citation{}
+			for _, item := range items {
+				c := item.Declaration
+				span, exists := spans[c.FileID]
+				if !exists {
+					span = c
 				}
-				qualityFixtureRespond(w, qualityFixtureRead(contract))
-			case 3:
-				qualityFixtureRespond(w, qualityFixtureGroup(contract, "Related tests assert the return value."))
-			default:
-				qualityFixtureRespond(w)
+				span.StartLine, span.EndLine = min(span.StartLine, c.StartLine), max(span.EndLine, c.EndLine)
+				spans[c.FileID] = span
 			}
-			return
-		}
-		first, last := scope.item(scope.Tests[0]), scope.item(scope.Tests[len(scope.Tests)-1])
-		span := first.Declaration
-		span.EndLine = last.Declaration.EndLine
-		contract := testquality.Citation{SnapshotID: first.Identity.SnapshotID, FileID: "production", StartLine: 2, EndLine: 2}
-		if len(request.Messages) == 1 {
-			qualityFixtureRespond(w, qualityFixtureRead(span), qualityFixtureRead(contract))
-			return
-		}
-		recorded := 0
-		for _, message := range request.Messages {
-			if message.Role == "tool" && strings.Contains(message.Content, `"recorded":true`) {
-				recorded++
-			}
-		}
-		if recorded < len(scope.Tests) {
-			end := min(recorded+30, len(scope.Tests))
-			calls := make([]qualityFixtureCall, 0, end-recorded)
-			for _, item := range scope.Tests[recorded:end] {
-				calls = append(calls, qualityFixtureTest(scope.item(item), 3, 3, "The test checks the result."))
+			calls := []qualityFixtureCall{qualityFixtureRead(contract)}
+			for _, span := range spans {
+				calls = append(calls, qualityFixtureRead(span))
 			}
 			qualityFixtureRespond(w, calls...)
-		} else if recorded == len(scope.Tests) {
+			return
+		}
+		recorded := qualityFixtureCallCount(request, "record_test")
+		if recorded < len(items) {
+			end := min(recorded+30, len(items))
+			calls := make([]qualityFixtureCall, 0, end-recorded)
+			for _, item := range items[recorded:end] {
+				calls = append(calls, qualityFixtureTest(item, 3, 3, "The test checks the result."))
+			}
+			qualityFixtureRespond(w, calls...)
+		} else if qualityFixtureCallCount(request, "record_group") == 0 {
+			var calls []qualityFixtureCall
+			for _, pkg := range []string{"example", "other"} {
+				group := qualityFixtureGroup(contract, "Related tests assert the return value.")
+				group.args.(map[string]any)["scope"], group.args.(map[string]any)["package"] = "package", pkg
+				calls = append(calls, group)
+			}
+			qualityFixtureRespond(w, calls...)
+		} else if qualityFixtureCallCount(request, "record_group") == 2 {
+			close(ready)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
 			qualityFixtureRespond(w, qualityFixtureGroup(contract, "Related tests assert the return value."))
 		} else {
-			qualityFixtureRespond(w)
+			qualityFixtureRespond(w, qualityFixtureCall{"finish_review", map[string]any{}})
 		}
 	}))
 	defer provider.Close()
 	s := New(report)
 	s.qualityStore = testquality.Store{Directory: t.TempDir()}
-	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture", MaxSteps: 8, ContextBytes: 1048576})
+	s.ConfigureAgent(intelligence.Config{Enabled: true, BaseURL: provider.URL, Model: "fixture", MaxSteps: 20, ContextBytes: 1048576})
 	launch := qualityRequest(t, s, "/api/test-quality/start", `{"allowExecution":false}`)
 	if launch.Code != 202 {
 		t.Fatal(launch.Body.String())

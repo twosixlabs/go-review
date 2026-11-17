@@ -3,6 +3,7 @@ package workbench
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -213,7 +214,11 @@ func TestQualityLiveBrowserArchive(t *testing.T) {
 	if directory == "" {
 		t.Fatal("GO_REVIEW_QUALITY_TRACE_DIR is required")
 	}
-	store := testquality.Store{Directory: filepath.Join(directory, "job-archive")}
+	archive := os.Getenv("GO_REVIEW_QUALITY_ARCHIVE")
+	if archive == "" {
+		archive = filepath.Join(directory, "job-archive")
+	}
+	store := testquality.Store{Directory: archive}
 	summaries, err := store.ListSummaries("")
 	if err != nil {
 		t.Fatal(err)
@@ -225,8 +230,8 @@ func TestQualityLiveBrowserArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Suite == nil || saved.Error != "" {
-		t.Fatalf("live job did not deliver usable advice: %s %s", saved.Status, saved.Error)
+	if saved.Suite == nil {
+		t.Fatal("saved assessment has no retained suite judgment for browser replay")
 	}
 	server := New(saved.Reports[0].Report)
 	server.qualityStore = store
@@ -246,6 +251,50 @@ func qualityLiveBrowserData(t *testing.T, server *Server, saved *testquality.Ass
 			t.Fatalf("saved %s read failed: %v", operation, err)
 		}
 		browser[operation] = data
+	}
+	for offset := 0; ; {
+		data, err := server.queryTestQuality(t.Context(), testquality.QueryInput{AssessmentID: saved.ID, Operation: "events", Offset: offset, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		browser[fmt.Sprintf("events-%d", offset)] = data
+		var page struct {
+			Items      []struct{ Offset int }
+			NextOffset *int
+			TotalBytes int
+		}
+		if err := json.Unmarshal(data, &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range page.Items {
+			for textOffset := 0; ; {
+				data, err := server.queryTestQuality(t.Context(), testquality.QueryInput{
+					AssessmentID: saved.ID, Operation: "event", Offset: event.Offset, TextOffset: textOffset, TextLimit: 6000,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				browser[fmt.Sprintf("event-%d-%d", event.Offset, textOffset)] = data
+				var detail struct {
+					TextPage struct{ NextOffset *int }
+				}
+				if err := json.Unmarshal(data, &detail); err != nil {
+					t.Fatal(err)
+				}
+				if detail.TextPage.NextOffset == nil {
+					break
+				}
+				textOffset = *detail.TextPage.NextOffset
+			}
+		}
+		if page.NextOffset == nil {
+			if len(page.Items) > 0 {
+				offset = page.TotalBytes
+				continue
+			}
+			break
+		}
+		offset = *page.NextOffset
 	}
 	var expectations []testquality.ExpectedBehavior
 	if saved.Suite != nil {

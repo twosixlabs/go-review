@@ -8,19 +8,22 @@
 # retrieval-build OUTPUT writes a verification binary to the specified path.
 # quality selectors validate evidence-first facts, judgments, execution, archives and UI.
 # quality-agent runs native Test Quality agent regression tests.
+# quality-discovery checks shared test/file discovery, containment and agent history.
 # quality-live [SCENARIO] checks advisory-result delivery with the configured local model on owned contracts,
 # quality-live retained reviews one small package from GO_REVIEW_QUALITY_ARCHIVE,
 # GO_REVIEW_QUALITY_ASSESSMENT and GO_REVIEW_QUALITY_PACKAGE without fresh execution.
 # It saves provider requests and an independent assessment in the trace directory.
-# quality-live exercises runs mixed-quality multi-package review, one authorized
-# diagnostic, and cancellation/reopening with the configured local model.
+# quality-live exercises runs mixed-quality multi-package review, primary-owned
+# delegation, one authorized diagnostic, and cancellation/reopening.
 # The mixed and cancel cases also export actual responses for browser replay.
 # Requires GO_REVIEW_QUALITY_TRACE_DIR; uses production MCP/tools and request
 # budgets for individual and collective assessment, not predetermined judgments.
 # Stops at the first protocol/evidence failure.
-# Each live case owns a five-minute context; the aggregate test timeout allows
-# all seven cases to finish without changing those per-case execution bounds.
-# quality-browser exports saved production-reader responses for read-only browser replay.
+# Live cases own bounded contexts; the aggregate timeout allows them to finish
+# without changing those per-case execution bounds.
+# quality-browser exports saved production-reader responses, including history, for
+# read-only browser replay. GO_REVIEW_QUALITY_ARCHIVE optionally selects the archive
+# directory instead of GO_REVIEW_QUALITY_TRACE_DIR/job-archive.
 # quality-prompts ARCHIVE_DIRECTORY ASSESSMENT_ID measures saved prompt contexts without inference.
 # quality-build OUTPUT checks dependent Go packages and writes a verification binary.
 set -eu
@@ -28,6 +31,10 @@ cd "$(dirname "$0")/.."
 
 selector=${1:-}
 case "$selector" in
+  quality-discovery)
+    go test ./internal/workbench -run '^TestQuality(MCP|Agent.*(Scope|Delegat|File|Event))' -count=1
+    node --test internal/webui/review_query_test.js
+    ;;
   quality-agent)
     go test ./internal/workbench ./internal/testquality -run '^TestQualityAgent' -count=1
     ;;
@@ -63,14 +70,16 @@ case "$selector" in
     ;;
   quality-live)
     scenario=${2:-}
-    case "$scenario" in mixed|diagnostic|cancel|exercises)
-      pattern='^TestQualityAgentLive(Mixed|Diagnostic|Cancel)$'
+    case "$scenario" in mixed|delegation|discovery|diagnostic|cancel|exercises)
+      pattern='^TestQualityAgentLive(Mixed|Delegation|Discovery|Diagnostic|Cancel)$'
       case "$scenario" in
         mixed) pattern='^TestQualityAgentLiveMixed$';;
+        delegation) pattern='^TestQualityAgentLiveDelegation$';;
+        discovery) pattern='^TestQualityAgentLiveDiscovery$';;
         diagnostic) pattern='^TestQualityAgentLiveDiagnostic$';;
         cancel) pattern='^TestQualityAgentLiveCancel$';;
       esac
-      GO_REVIEW_QUALITY_LIVE=1 go test ./internal/workbench -run "$pattern" -count=1 -v -timeout 22m
+      GO_REVIEW_QUALITY_LIVE=1 go test ./internal/workbench -run "$pattern" -count=1 -v -timeout 28m
       exit
       ;;
     esac

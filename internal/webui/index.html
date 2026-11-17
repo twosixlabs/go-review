@@ -90,6 +90,7 @@
 <link rel="stylesheet" href="/changes.css"><script src="/vendor/diff.min.js"></script><script src="/vendor/prism-core.min.js"></script><script src="/vendor/prism-clike.min.js"></script><script src="/vendor/prism-go.min.js"></script><script src="/vendor/prism-json.min.js"></script><script src="/vendor/prism-javascript.min.js"></script><script src="/vendor/prism-python.min.js"></script><script src="/vendor/prism-bash.min.js"></script><script src="/change-tools.js"></script><script src="/changes.js"></script>
 <section id="test-quality-workspace" aria-label="AI Test Quality" hidden>
 <div class="quality-heading"><h2>Test Quality <small>Optional AI assessment</small></h2><button id="quality-return" type="button">Return to exploration</button></div>
+<div class="quality-top-grid"><div class="quality-summary">
 <p>Explore test strengths, potential gaps, and supporting evidence.</p>
 <div class="quality-actions"><button id="quality-start" type="button">Start project assessment</button><button id="quality-cancel" type="button" hidden>Cancel assessment</button><label>Saved assessment <select id="quality-assessments" aria-label="Saved test quality assessment"></select></label><button id="quality-refresh" type="button">Refresh</button></div>
 <p id="quality-provider"></p><label id="quality-external" hidden><input id="quality-consent" type="checkbox"> I approve sending retained production/test source and execution evidence to this configured external provider for this assessment.</label>
@@ -97,11 +98,17 @@
 <p id="quality-notice" role="status"></p><div id="quality-progress" aria-live="polite"></div>
 <div id="quality-job-progress" hidden><label for="quality-progress-bar" id="quality-progress-label" aria-live="polite"></label><progress id="quality-progress-bar" aria-describedby="quality-progress"></progress></div>
 <section id="quality-overview" aria-label="Assessment score and scope"></section>
+</div><section id="quality-history" aria-labelledby="quality-history-heading">
+<div class="quality-history-heading"><h3 id="quality-history-heading">Agent conversation</h3><label>Show <select id="quality-history-filter"><option value="">All agents</option><option value="Lead">Lead only</option></select></label></div>
+<p class="muted">Recorded lead and subagent updates · read-only</p>
+<div id="quality-history-log" role="log" aria-label="Agent conversation history" tabindex="0"></div>
+<div class="quality-history-footer"><span id="quality-history-status" role="status">Select an assessment to read its agent history.</span><button id="quality-history-retry" type="button" hidden>Retry history</button><button id="quality-history-latest" type="button" hidden>Jump to latest</button></div>
+</section></div>
 <details id="quality-rubric"><summary>About this assessment</summary><p>Individual test judgments assess craftsmanship and assertion strength. Collective judgments assess behaviors and usage conditions across the suite. Ratings are guidance for review; unassessed evidence is not scored as zero.</p><p>Fresh diagnostics are limited to the source-verified evaluated suite. Turn them off to use retained evidence only.</p><div id="quality-limitations"></div></details>
 <details id="quality-findings-panel"><summary>Project-wide findings &amp; strengths</summary><label>Category <input id="quality-category" placeholder="Filter by category"></label><div id="quality-findings"></div></details>
 <div class="quality-grid"><aside aria-label="Test quality packages"><h3>Modules &amp; packages</h3><div id="quality-packages"></div></aside><section aria-label="Assessed tests"><h3 id="quality-list-heading">Tests</h3><label>Find <input id="quality-search" type="search" placeholder="Test or package"></label><label>Status <select id="quality-filter"><option value="">All</option><option value="scored">Scored</option><option value="insufficient-evidence">Insufficient evidence</option><option value="unreviewed">Unreviewed</option><option value="excluded">Excluded</option></select></label><div id="quality-functions"></div></section><section id="quality-detail" aria-label="Selected test quality evidence"></section></div>
 <section id="quality-source" aria-label="Pinned test quality source"></section>
 </section>
-<link rel="stylesheet" href="/test-quality.css"><script src="/test-quality.js"></script>
+<link rel="stylesheet" href="/test-quality.css"><script src="/test-quality.js"></script><script src="/quality-history.js"></script>
 <script src="/retrieval.js"></script>
 </body></html>

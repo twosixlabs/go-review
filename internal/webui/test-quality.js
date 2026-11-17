@@ -138,7 +138,10 @@ async function qualityPoll() {
   qualityRenderProgress(current?.status,current?.summary,current?.phase);
   qualityEl('quality-cancel').hidden=!current||!['running','queued'].includes(current.status);
   if(current)qualityEl('quality-progress').textContent=current.status+' · '+qualityCounts(current.summary);
-  if(qualityState.active&&qualityState.id)await qualityOverview();
+  if(qualityState.active) {
+    qualityHistoryRefresh();
+    if(qualityState.id)await qualityOverview();
+  }
   if(active.length)qualityState.timer=setTimeout(()=>qualityAct(qualityPoll),1200);
 }
 async function qualityOverview() {
@@ -403,6 +406,7 @@ qualityEl('quality-cancel').onclick=()=>qualityAct(async()=>{await qualityReques
 qualityEl('quality-refresh').onclick=()=>qualityAct(async()=>{await qualityPoll();if(qualityState.id){await qualityPackages();await qualityFunctions();}});
 qualityEl('quality-assessments').onchange=()=>qualityAct(async()=>{
   qualityState.id=qualityEl('quality-assessments').value;qualityState.group=null;qualityState.serial++;
+  qualityHistoryRefresh();
   await qualityOverview();await qualityPackages();await qualityFunctions();
 });
 qualityEl('quality-search').oninput=()=>qualityAct(qualityFunctions);

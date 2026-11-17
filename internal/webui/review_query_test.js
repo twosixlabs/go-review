@@ -182,6 +182,25 @@ test('package discovery has bounded gauges and explicit complete membership dril
     ['dependency/998','dependency/999']);
 });
 
+test('package test discovery distinguishes production-only files and searches test paths',()=>{
+  const r=fixture();
+  r.testSources=[{file:{id:'tests',package:'sample',path:'clarification/behavior_test.go',source:'package sample'},
+    declarations:[{id:'case',name:'TestBehavior',kind:'test',location:{fileID:'tests',line:3,endLine:4}}]}];
+  const production=query.query(r,'packages',{package:'sample',section:'files'});
+  assert.equal(production.sourceScope,'production');
+  assert.equal(production.testFileCount,1);
+  const files=query.query(r,'packages',{package:'sample',section:'testFiles'});
+  assert.deepEqual(files.items.map(f=>f.id),['tests']);
+  const tests=query.query(r,'packages',{package:'sample',section:'tests'});
+  assert.equal(tests.items[0].id,'case');
+  assert.equal(tests.items[0].package,'sample');
+  assert.equal(tests.items[0].path,'clarification/behavior_test.go');
+  const found=query.query(r,'search',{query:'clarification'});
+  assert.equal(found.items[0].kind,'test');
+  assert.equal(found.items[0].package,'sample');
+  assert.equal(found.items[0].path,'clarification/behavior_test.go');
+});
+
 test('metric ties are bounded and every maximum owner remains discoverable',()=>{
   const r=fixture();
   r.symbols=Array.from({length:500},(_,i)=>({...r.symbols[0],id:'tie-'+i}));

@@ -266,6 +266,10 @@ func (s *Server) queryTestQuality(ctx context.Context, input testquality.QueryIn
 		s.qualityMu.Unlock()
 		return nil, err
 	}
+	if input.Operation == "events" || input.Operation == "event" {
+		defer s.qualityMu.Unlock()
+		return s.qualityStore.AgentEvents(input)
+	}
 	if input.Operation == "assessments" {
 		defer s.qualityMu.Unlock()
 		s.mu.RLock()
@@ -328,7 +332,7 @@ func (s *Server) queryTestQuality(ctx context.Context, input testquality.QueryIn
 
 func registerTestQualityTool(server *mcp.Server, s *Server) {
 	mcp.AddTool(server, &mcp.Tool{Name: "review_test_quality",
-		Description: "Saved AI test-quality judgments; never starts jobs/tests. operation: assessments (discover IDs), overview, indicators (source-qualified module/package scores), modules, tests, test/finding (snapshotID+symbolID, findingIndex), source (snapshotID+fileID+lines), evidence (snapshotID+evidenceOperation+args; catalog/symbols/test-runs/source/search/evidence/coverage/dataflow/logical/document/packages). symbolID identifies the TEST declaration; production IDs only supply supporting evidence. Page with offset/limit, follow nextOffset.",
+		Description: "Saved AI test-quality judgments and recorded agent activity; never starts jobs/tests. operation: assessments (discover IDs), overview, indicators (source-qualified module/package scores), modules, tests, test/finding (snapshotID+symbolID, findingIndex), events (paged agent history; offset is a returned BYTE cursor), event (complete JSON text at an event offset; textOffset/textLimit are runes), source (snapshotID+fileID+lines), evidence (snapshotID+evidenceOperation+args; catalog/symbols/test-runs/source/search/evidence/coverage/dataflow/logical/document/packages). symbolID identifies the TEST declaration; production IDs only supply supporting evidence. Page with offset/limit, follow nextOffset.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPointer(false)}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input testquality.QueryInput) (*mcp.CallToolResult, map[string]any, error) {
 			data, err := s.queryTestQuality(ctx, input)

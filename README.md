@@ -528,10 +528,26 @@ tests are considered together rather than each being required to cover the suite
 This is advisory guidance for human review, not certification: inspect the cited
 evidence and decide. Debatable scores or gap opinions do not trigger forced
 rescoring; provenance, execution permissions and resource limits remain enforced.
-Review agents investigate related tests using the retained evidence tools, with
-up to four groups reviewed concurrently. Completed observations are saved as
-review progresses. Overall suite ratings are a separate judgment, not an average
-of group or individual ratings. Deterministic checking sites, literal cases,
+One primary review agent owns the investigation, chooses what to inspect next,
+and optionally delegates focused work to up to three children (four agents total).
+It evaluates their reports, can redirect or recover from failed investigations,
+and owns the overall suite judgment. Completed observations are saved as review
+progresses. A completion tool returns missing assessments, project judgment or
+active children to the same primary conversation rather than ending it early.
+Lead and children share selected-test discovery and path-based file listing,
+reading and literal search. Retained evidence is the default; read-only live
+project files are explicitly labelled, and changed/new files cannot supply pinned
+grading citations. Assignments, agent messages, tool calls/results and original
+errors are recorded for inspection. The right-hand **Agent conversation** panel
+shows full lead and child responses as they arrive, with agent/time labels, a
+lead-only filter and expandable activity/errors. It preserves your reading
+position; **Jump to latest** resumes following new updates. Saved assessments
+reopen their retained history without inference; earlier assessments without
+recorded history say so explicitly. The panel is read-only, not an input to the
+lead agent. History is also available through the assessment query API
+(`events` and `event` operations).
+Overall suite ratings are a separate judgment, not an average of group or
+individual ratings. Deterministic checking sites, literal cases,
 helper bindings and retained outcomes are available as evidence, not automatic scores.
 Production source, control/data flow and recorded coverage provide
 supporting context; production functions are **not** assessment targets.

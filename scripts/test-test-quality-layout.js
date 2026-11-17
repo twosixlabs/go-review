@@ -3,6 +3,7 @@
 // CLI: node scripts/test-test-quality-layout.js LIVE_BROWSER_DATA OUTPUT_HTML [RUNNING_DATA].
 // Builds an offline browser fixture from production assets and actual archived
 // reader responses. It never starts a server, inference or target execution.
+// testQualityHistoryLayout additionally checks the responsive history panel.
 if (typeof window === 'undefined') {
   const fs = require('node:fs'), path = require('node:path');
   const [input, output, runningInput] = process.argv.slice(2);
@@ -25,7 +26,8 @@ window.fetch=async function(input,options={}) {
  else if(url.pathname==='/api/chat/status')key='chat-status';
  else if(url.pathname==='/api/test-quality/status')key='quality-status';
  else if(url.pathname==='/api/review')return {ok:true,json:async()=>({running:false,run:null})};
- else if(url.pathname==='/api/test-quality/query')key=args.operation==='test'?'test-'+args.symbolID:args.operation==='source'?'source-'+args.fileID:['expectation','conditions'].includes(args.operation)?args.operation+'-'+args.expectationID:args.operation;
+ else if(url.pathname==='/api/test-quality/query')key=args.operation==='events'?'events-'+(args.offset||0):args.operation==='event'?'event-'+args.offset+'-'+(args.textOffset||0):args.operation==='test'?'test-'+args.symbolID:args.operation==='source'?'source-'+args.fileID:['expectation','conditions'].includes(args.operation)?args.operation+'-'+args.expectationID:args.operation;
+ if(args.operation==='events'&&!(key in recorded))return {ok:true,json:async()=>({available:false,reason:'Agent history was not included in this replay.',items:[],nextOffset:null})};
  if(!key||!(key in recorded))return {ok:false,json:async()=>({error:'Read-only recorded fixture has no endpoint: '+url.pathname+' '+(args.operation||'')})};
  const response=window.qualityReplayPhase==='running'&&recorded.running&&key in recorded.running?recorded.running[key]:recorded[key];
  return {ok:true,json:async()=>response};
@@ -72,4 +74,32 @@ window.fetch=async function(input,options={}) {
   } finally {
     document.body.className = originalClasses;
   }
+};
+if(typeof window!=='undefined')window.testQualityHistoryLayout=async function() {
+  const assert=(condition,message)=>{if(!condition)throw Error(message);};
+  await qualityOpen();
+  await qualityHistoryRefresh();
+  const panel=document.getElementById('quality-history'),log=document.getElementById('quality-history-log');
+  const summary=document.querySelector('.quality-summary').getBoundingClientRect(),bounds=panel.getBoundingClientRect();
+  const stacked=innerWidth<=900||document.body.classList.contains('chat-open');
+  assert(stacked?bounds.top>=summary.bottom-1:bounds.left>=summary.right-1,'History panel overlaps the assessment summary');
+  assert(bounds.width>0&&bounds.right<=document.documentElement.clientWidth,'History panel extends outside the viewport');
+  assert(bounds.height<=622&&bounds.height>=360,'History panel has no bounded reading viewport');
+  assert(document.documentElement.scrollWidth<=document.documentElement.clientWidth,'History layout causes horizontal page overflow');
+  const messages=log.querySelectorAll('.quality-history-message');
+  assert(messages.length>0,'Recorded agent responses were not restored');
+  assert(!document.getElementById('quality-history-status').classList.contains('error'),'History reader failed');
+  assert(qualityHistoryFollowing(),'Initial history did not follow the latest response');
+  assert(log.scrollHeight>log.clientHeight,'History did not get its own scroll viewport');
+  const first=messages[0];
+  log.scrollTop=0;log.dispatchEvent(new Event('scroll'));
+  await qualityPoll();await qualityHistoryRefresh();
+  assert(document.getElementById('quality-history-status').textContent.includes(messages.length+' responses'),'Caught-up history was lost on refresh');
+  assert(log.scrollTop===0,'Polling stole the history reading position');
+  assert(first===log.querySelector('.quality-history-message'),'Polling replaced retained response cards');
+  assert(!document.getElementById('quality-history-latest').hidden,'Jump to latest is missing while reading older history');
+  document.getElementById('quality-history-latest').click();
+  assert(qualityHistoryFollowing(),'Jump to latest did not scroll the conversation');
+  clearTimeout(qualityState.timer);
+  return {layout:stacked?'stacked':'side-by-side',responses:messages.length};
 };

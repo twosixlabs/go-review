@@ -24,12 +24,35 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 	}
 	st, ct := mcp.NewInMemoryTransports()
 	server := service.server()
+	registerQualityFileTools(server, a)
 	type pinnedOverviewInput struct {
 		snapshotInput
 		overviewInput
 	}
 	registerReviewTool(server, service, "review_overview", "Read project purpose, module metrics and entry inventory from an assessment-pinned snapshot. Use snapshotID from the assigned scope.", "overview",
 		func(input pinnedOverviewInput) (string, string) { return input.SnapshotID, "" })
+	type testsInput struct {
+		SnapshotID string `json:"snapshotID" jsonschema:"Assessment snapshot ID"`
+		Package    string `json:"package,omitempty" jsonschema:"Exact Go import path; omit for all selected tests"`
+		Query      string `json:"query,omitempty" jsonschema:"Optional test name or package text"`
+		Offset     int    `json:"offset,omitempty"`
+		Limit      int    `json:"limit,omitempty"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "review_tests", Description: "Discover SELECTED TESTS by exact package or name, including qualified identities, module-relative file paths and exact source ranges. Copy returned paths/IDs; do not guess filenames. Available to lead and children. This is the assessment selection, not production symbols or current grading progress. Listing does not grant recording authority; children may record only explicitly assigned tests.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input testsInput) (*mcp.CallToolResult, map[string]any, error) {
+			if service.pinned[input.SnapshotID] == nil {
+				return nil, nil, fmt.Errorf("unknown assessment-pinned snapshot")
+			}
+			raw, err := testquality.Query(ctx, a, testquality.QueryInput{AssessmentID: a.ID, Operation: "selected-tests", SnapshotID: input.SnapshotID, Package: input.Package, Query: input.Query, Offset: input.Offset, Limit: input.Limit})
+			if err != nil {
+				return nil, nil, err
+			}
+			var output map[string]any
+			if err := json.Unmarshal(raw, &output); err != nil {
+				return nil, nil, err
+			}
+			return nil, output, nil
+		})
 	type factsInput struct {
 		SnapshotID string `json:"snapshotID" jsonschema:"Assessment-pinned snapshot ID"`
 		SymbolID   string `json:"symbolID,omitempty" jsonschema:"Selected TEST declaration ID; omit to page all selected tests"`
@@ -131,7 +154,7 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 	allowed := map[string]bool{}
 	for _, tool := range inventory.Tools {
 		switch tool.Name {
-		case "review_overview", "review_source", "review_search", "review_document", "review_evidence", "review_packages", "review_flow", "review_dataflow", "quality_retrieve", "quality_facts", "quality_diagnostics":
+		case "review_overview", "review_source", "review_search", "review_document", "review_evidence", "review_packages", "review_flow", "review_dataflow", "quality_retrieve", "quality_facts", "quality_diagnostics", "review_tests", "review_list_files", "review_read_file", "review_search_files":
 		default:
 			continue
 		}
@@ -181,6 +204,19 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 			return nil, nil, err
 		}
 		var citations []testquality.Citation
+		if name == "review_read_file" {
+			var source struct {
+				Data struct {
+					Citation *testquality.Citation `json:"citation"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(data, &source); err != nil {
+				return nil, nil, err
+			}
+			if source.Data.Citation != nil {
+				citations = append(citations, *source.Data.Citation)
+			}
+		}
 		if name == "review_source" || name == "review_document" {
 			var source struct {
 				Data struct {

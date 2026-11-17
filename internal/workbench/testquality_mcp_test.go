@@ -87,6 +87,40 @@ func TestQualityMCPOverviewSelectsPinnedSnapshot(t *testing.T) {
 	}
 }
 
+func TestQualityMCPDiscoversSelectedTestsByPackage(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	args, _ := json.Marshal(map[string]any{"snapshotID": a.Items[0].Identity.SnapshotID, "package": "example", "limit": 1})
+	raw, citations, err := options.Read(t.Context(), "review_tests", args)
+	if err != nil || len(citations) != 0 {
+		t.Fatalf("selected test inventory unavailable: %s %v", raw, err)
+	}
+	var result struct {
+		Items []struct {
+			Identity    testquality.Identity `json:"identity"`
+			Declaration testquality.Citation `json:"declaration"`
+			Path        string               `json:"path"`
+		}
+		Total int
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || result.Total != 1 || result.Items[0].Identity != a.Items[0].Identity || result.Items[0].Declaration != a.Items[0].Declaration || result.Items[0].Path != "f_test.go" {
+		t.Fatalf("discovery omitted exact assessment identity/source: %s %v", raw, err)
+	}
+	args, _ = json.Marshal(map[string]any{"snapshotID": a.Items[0].Identity.SnapshotID, "package": "other"})
+	raw, _, err = options.Read(t.Context(), "review_tests", args)
+	if err != nil || !strings.Contains(string(raw), `"total":0`) {
+		t.Fatalf("package filter escaped selection: %s %v", raw, err)
+	}
+}
+
 func TestQualityMCPPinsReadOnlyToolsToAssessment(t *testing.T) {
 	source := "package example\nfunc F() int {return 1}\n"
 	report := &review.Report{Module: "example", Files: []review.File{{ID: "source", Path: "sample.go", Package: "example", Source: source, SHA256: testquality.Digest([]byte(source))}}}

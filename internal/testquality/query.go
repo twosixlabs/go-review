@@ -28,6 +28,8 @@ type QueryInput struct {
 	EndLine           int             `json:"endLine,omitempty"`
 	Offset            int             `json:"offset,omitempty"`
 	Limit             int             `json:"limit,omitempty"`
+	TextOffset        int             `json:"textOffset,omitempty"`
+	TextLimit         int             `json:"textLimit,omitempty"`
 	EvidenceOperation string          `json:"evidenceOperation,omitempty"`
 	Args              json.RawMessage `json:"args,omitempty"`
 }
@@ -341,6 +343,27 @@ func query(ctx context.Context, a *Assessment, input QueryInput) (json.RawMessag
 		return page(out, input)
 	case "unavailable":
 		return page(a.Unavailable, input)
+	case "selected-tests":
+		type selectedTest struct {
+			Identity    Identity `json:"identity"`
+			Name        string   `json:"name"`
+			Package     string   `json:"package"`
+			Path        string   `json:"path,omitempty"`
+			Declaration Citation `json:"declaration"`
+			TestKind    string   `json:"testKind,omitempty"`
+		}
+		out := []selectedTest{}
+		paths := map[string]map[string]string{}
+		for _, pinned := range a.Reports {
+			paths[pinned.SnapshotID] = map[string]string{}
+			for _, source := range pinned.Report.TestSources {
+				paths[pinned.SnapshotID][source.File.ID] = source.File.Path
+			}
+		}
+		for _, item := range items {
+			out = append(out, selectedTest{item.Identity, item.Name, item.Package, paths[item.Identity.SnapshotID][item.Declaration.FileID], item.Declaration, item.TestKind})
+		}
+		return page(out, input)
 	case "tests":
 		type row struct {
 			Identity     Identity `json:"identity"`

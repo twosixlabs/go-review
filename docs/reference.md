@@ -899,44 +899,101 @@ For two direct integer range comparisons of the same unchanged parameter,
 `mutuallyExclusive` records when their intersection is empty. Those alternatives
 cannot both be true; a simultaneous-input case is not a missing test. Unsupported
 comparisons and larger expressions do not acquire this inference.
-Up to four review agents independently investigate related package tests using
-assessment-pinned source, documentation and evidence tools. They record individual
-and collective group judgments through tool calls as they work; completed records
-are saved immediately. Group scope is retained separately from the independently
-judged project-wide synthesis. The host validates identity, scores and inspected
-source provenance, not the correctness of advisory interpretations.
-Agents can request typed, authorized diagnostics on demand. A provider failure
-stops the assessment with its actual error; tests without recorded judgments
-remain unreviewed. Assessment requests follow the job owner's cancellation rather
-than the interactive chat timeout. Conversations honor explicitly configured
-step and context limits; after saved progress, conversation compaction retains
-the recorded ledger and requires new source reads for subsequent citations.
-Consecutive identical evidence reads with unchanged results trigger a reminder;
-another unchanged repetition stops the stalled investigation with an explicit
-error, preserving completed judgments. Stalls and configured investigation
-limits stop only the affected package: other active and queued groups continue,
-and the assessment is marked partial with the affected scope and error. Provider
-or persistence failures still stop the entire assessment. A repeated-read error
-retains the tool arguments and original tool error, when present.
+One primary review agent owns planning, investigation, delegation and project-wide
+synthesis using assessment-pinned source, documentation and evidence tools.
+`review_progress` discovers selected tests and saved results. The primary can
+inspect and record directly, or use `delegate_review` for focused investigations
+with primary-chosen test identities across packages or modules. Omitting tests
+creates a research-only child. Up to three children can run alongside the primary;
+children cannot delegate or record the project synthesis. There is no automatic
+package scheduling or separate synthesis conversation.
+Prompts direct the primary to delegate small test sets or concrete questions with
+explicit deliverables, reserve research-only work for narrow questions, and keep
+recording independent work while children run. Assessment children are directed
+to record each completed test immediately, not batch judgments into a final
+report. These are agent strategy directives, not framework-enforced scheduling.
+Both lead and children have `review_tests` for exact-package selected identities,
+file paths and declaration ranges. `review_packages` sections `files`/`symbols` are explicitly
+production-only; `testFiles`/`tests` expose retained test files/declarations
+(including helpers). Neither listing grants recording or citation authority.
+`review_list_files`, `review_read_file` and `review_search_files` navigate
+module-relative paths with `snapshotID` and `source: "retained"` (default) or
+`"live"`. Live reads are confined to the actual module root and cannot write or
+execute. Private credential/configuration paths and symlinks are excluded;
+recursive live searches also skip `node_modules` and `.work`. Absence in a
+retained inventory is not proof of filesystem absence. Live reads disclose
+`snapshotMatch`; only unchanged retained bytes and a completely returned line
+range grant pinned citation authority. Changed/new files are contextual evidence.
+List/search pages are byte-bounded; search snippets are not source authority.
+Live text files are limited to 2 MiB; discovery to 10,000 entries and searches to
+16 MiB. Budget errors require narrowing the path/pattern. Reads select up to
+500 lines and page text with `textOffset`/`textLimit` and `textPage.nextOffset`.
+`read_review_agent` returns child status, report and actual errors;
+`cancel_review_agent` stops and joins a child before replacement. Child failures
+are feedback for the primary to evaluate and recover from, not automatic
+cancellation of the review. Child reports do not grant the primary source citation
+authority; it must inspect its own cited source. All agents share execution
+authorization and cumulative diagnostic limits.
+Completed test and optional package judgments are saved immediately.
+`finish_review` accepts completion only when every selected test has an assessment,
+the project collective judgment is recorded, and no children are active. Missing
+requirements are returned to the same ongoing primary conversation. Ordinary
+assistant text cannot end the review. The host validates identity, score range,
+inspected-source provenance and completeness, not advisory interpretations or
+agreement between individual and collective scores.
+Assessment requests follow the job owner's cancellation rather than the
+interactive chat timeout. Conversations honor explicitly configured step and
+context limits; compaction retains saved records and delegated handles, and
+requires new source reads for subsequent citations. Repeated unchanged evidence
+reads return guidance to reorient the primary; a stalled child stops locally.
+Read errors retain their arguments and original error. Primary resource exhaustion
+leaves a partial assessment; primary provider or persistence failures stop with
+their actual error. Cancellation stops and joins all children. Recorded results
+remain available, and tests without recorded judgments remain unreviewed.
 The Test Quality overview displays the latest agent activity in a labelled panel
-above the scores; it is a current-status display, not a conversation history.
-Explicit live evaluation retains request, response, MCP-read and admission
-trajectories through `GO_REVIEW_QUALITY_TRACE_DIR`; ordinary assessments do not
-persist these full-context traces. It checks delivery of explained, evidence-
-backed advice within budgets, not exact scores, exhaustive gap maps or wording.
+above the scores. Beside the summary, **Agent conversation** displays the retained
+lead/child responses chronologically with agent IDs, timestamps and an All / Lead
+filter. Tool activity and errors are grouped in expandable sections; complete
+event text is fetched in pages only when requested. Response Markdown uses the
+existing sanitized chat renderer. New messages append without replacing history
+or interrupting a user reading earlier responses; **Jump to latest** resumes
+following. The panel stacks below the summary on narrow screens, preserving the
+package/test/evidence grid. History refresh uses the existing job polling and a
+separate byte cursor, ignores old-assessment replies and exposes read failures
+with retry. Reading history starts no inference and does not send guidance to the
+assessment lead or open a separate assistant conversation.
+Ordinary assessments persist an owner-local, append-only `agent-events.jsonl`
+with child assignments/modes/identities, initial prompts/tool definitions,
+assistant messages, in-flight tool calls, arguments/results, original errors and
+terminal outcomes (including explicit cancellation).
+Repeated provider request histories are not copied into the log. Individual
+records are bounded to 8 MiB; persistence errors stop work rather than silently
+disabling history. Malformed tool arguments are retained verbatim as a JSON
+string so logging does not prevent the agent from correcting its call.
+History is available during execution and after reopening through the read-only
+API/MCP operations below; reading it starts no inference. Earlier assessments
+without logs explicitly report unavailable history. This does not retrofit
+logging into a process already running an older binary.
+Explicit live evaluation additionally retains full-context traces through
+`GO_REVIEW_QUALITY_TRACE_DIR`. It checks delivery of explained, evidence-backed
+advice within budgets, not exact scores, exhaustive gap maps or wording.
 `scripts/test-agent-capabilities.sh quality-live retained` runs a five-minute
 local-model check on a package with at most twelve declarations from a saved
 assessment. Set `GO_REVIEW_QUALITY_ARCHIVE`, `GO_REVIEW_QUALITY_ASSESSMENT`,
 `GO_REVIEW_QUALITY_PACKAGE` and `GO_REVIEW_QUALITY_TRACE_DIR`. It saves provider
 requests and an independent result archive, disables fresh execution, and checks
 that cited advice survives reload and is available through the result readers.
-`quality-live exercises` checks a small mixed-quality project, an explicitly
-requested targeted rerun, and cancellation after saved progress. The cases can
-also run separately as `quality-live mixed`, `quality-live diagnostic` and
+`quality-live exercises` checks a small mixed-quality project, primary-owned
+delegation and synthesis, an explicitly requested targeted
+rerun, and cancellation after saved progress. The cases can also run separately
+as `quality-live mixed`, `quality-live delegation`, `quality-live discovery`, `quality-live diagnostic` and
 `quality-live cancel`. They use the configured local model and
 `GO_REVIEW_QUALITY_TRACE_DIR`; mixed and cancelled results include browser-reader
 exports. The layout replay script accepts an optional running-response export
 to check recorded intermediate progress without launching new inference.
+The discovery exercise checks a focused child's selected-test lookup, retained
+test inspection and live-only file read on a tiny multi-package fixture, using
+the production event archive to verify what actually happened.
 
 V3 archives use immutable content-addressed report/fact blobs and independently
 changed result/diagnostic records with atomic metadata checkpoints. Active queries
@@ -978,6 +1035,13 @@ Start with `operation: "assessments"` to discover IDs for the current project;
 preserve the chosen `assessmentID`. Operations:
 
 - `overview`: score, rubric version, scope and provenance.
+- `events`: bounded event index. `offset`/`nextOffset` are **byte cursors**, not
+  item counts; preserve returned event offsets. Rows contain previews and
+  payload sizes, not full tool results.
+- `event`: complete serialized event text at one returned event `offset`.
+  Page with `textOffset`/`textLimit` (Unicode code points, up to 24,000);
+  follow `textPage.nextOffset` until null. Responses are bounded to 24,000
+  encoded bytes, so requested text limits may be reduced without losing content.
 - `modules`, `tests`, `findings`, `unavailable`: paged membership;
   use `offset`/`limit` (1–100) and follow `nextOffset`.
 - `test`, `finding`: qualified `snapshotID` and `symbolID` (the retained test
