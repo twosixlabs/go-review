@@ -263,10 +263,7 @@ test('Test Quality launches explicitly, retains background context and drills in
     enabled=true;
     const progress=dom.window.document.querySelector('#quality-progress-bar');
     assert.ok(progress,'running assessment has no progress indicator');
-    assert.match(dom.window.document.querySelector('#quality-overview').textContent,/Reviewing acceptance tests/,'live agent activity must be visible');
-    const activity=dom.window.document.querySelector('.quality-activity');
-    assert.equal(activity.getAttribute('role'),'status','agent activity must be announced accessibly');
-    assert.match(activity.textContent,/Agent activity.*Reviewing acceptance tests/s,'activity must be labelled, not an unexplained line');
+    assert.doesNotMatch(dom.window.document.querySelector('#quality-overview').textContent,/Reviewing acceptance tests/,'the overview must not duplicate agent messages shown in conversation history');
     assert.equal(progress.value,1);
     assert.equal(progress.max,3,'excluded functions must not inflate work remaining');
     assert.match(dom.window.document.querySelector('#quality-progress-label').textContent,/1 of 3 tests processed/);

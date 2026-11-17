@@ -950,8 +950,7 @@ Read errors retain their arguments and original error. Primary resource exhausti
 leaves a partial assessment; primary provider or persistence failures stop with
 their actual error. Cancellation stops and joins all children. Recorded results
 remain available, and tests without recorded judgments remain unreviewed.
-The Test Quality overview displays the latest agent activity in a labelled panel
-above the scores. Beside the summary, **Agent conversation** displays the retained
+Beside the Test Quality summary, **Agent conversation** displays the retained
 lead/child responses chronologically with agent IDs, timestamps and an All / Lead
 filter. Tool activity and errors are grouped in expandable sections; complete
 event text is fetched in pages only when requested. Response Markdown uses the
