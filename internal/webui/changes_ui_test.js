@@ -7,7 +7,7 @@ const {JSDOM}=require('jsdom');
 
 test('Change Review stays independent of Application and does not mark progress by browsing',async()=>{
   const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),{runScripts:'outside-only',url:'http://127.0.0.1:8090'});
-  for(const name of ['visual-review.css','changes.css']){
+  for(const name of ['visual-review.css','workspace.css','changes.css']){
     const style=dom.window.document.createElement('style');style.textContent=fs.readFileSync(path.join(__dirname,name),'utf8');dom.window.document.head.append(style);
   }
   const report={root:'/repo',module:'app',sourceSHA256:'ordinary',packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]};
@@ -64,9 +64,19 @@ test('Change Review stays independent of Application and does not mark progress 
     const before=vm.runInContext('JSON.stringify({report,mode})',ctx);
     const destination=dom.window.document.querySelector('#change-review');
     assert.ok(destination,'Change Review must be a persistent Explore destination');
+    dom.window.document.body.classList.add('visual-workspace');
+    assert.match(fs.readFileSync(path.join(__dirname,'changes.css'),'utf8'),
+      /body\.visual-workspace\.change-review-open main/,
+      'Change Review hide rule must outrank the Application main-grid layout');
     destination.click();
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(dom.window.document.querySelector('#change-workspace').hidden,false);
+    assert.ok(dom.window.document.body.classList.contains('visual-workspace'),
+      'test did not exercise the responsive Application shell');
+    assert.equal(dom.window.getComputedStyle(dom.window.document.querySelector('main')).display,'none',
+      'Application workspace still occupies the viewport over Change Review');
+    assert.notEqual(dom.window.getComputedStyle(dom.window.document.querySelector('#change-workspace')).display,'none',
+      'Change Review is hidden by the Application workspace layout');
     assert.equal(dom.window.getComputedStyle(dom.window.document.body).overflow,'auto','comparison content is trapped in Application fixed-height shell');
     assert.equal(destination.getAttribute('aria-current'),'page','Change Review is not identified as the active Explore destination');
     assert.notEqual(dom.window.document.querySelector('#application').getAttribute('aria-pressed'),'true','Application remains selected while Change Review is active');

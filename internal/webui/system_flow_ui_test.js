@@ -14,7 +14,8 @@ test('architectural home navigates context, components and alternatives with sou
     ],operations:[{id:'create-key',name:'Create',componentID:'service',symbolID:'create',location:{fileID:'f',line:1,endLine:2}}],
     exchanges:[],alternatives:[
       {id:'true',componentID:'service',symbolID:'create',decision:'valid',label:'true',execution:'exercised',reason:'Positive unique counter.',location:{fileID:'f',line:2},members:[],witnesses:[],requires:[]},
-      {id:'false',componentID:'service',symbolID:'create',decision:'valid',label:'false',execution:'not-observed',reason:'No hit on this arm.',location:{fileID:'f',line:2},members:[],witnesses:[],requires:[]}
+      {id:'false',componentID:'service',symbolID:'create',decision:'valid',label:'false',execution:'not-observed',reason:'No hit on this arm.',location:{fileID:'f',line:2},members:[],witnesses:[],requires:[]},
+      {id:'unknown',componentID:'service',symbolID:'create',decision:'stored',label:'failure',execution:'unknown',reason:'No evidence.',location:{fileID:'f',line:2},members:[],witnesses:[],requires:[]}
     ],limitations:[]
   }};
   snapshot.unitEvidence={sourceSHA256:'source',runs:[{selection:{package:'app/service',tests:['TestCreate']},matchedTests:['TestCreate'],status:'partial',error:'runtime truncated',runtimeTracePath:'/artifacts/runtime.trace',runtime:{
@@ -59,6 +60,8 @@ test('architectural home navigates context, components and alternatives with sou
     assert.ok(node);node.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
     assert.match(doc.querySelector('#detail').textContent,/valid.*true.*exercised/s);
     assert.match(doc.querySelector('#detail').textContent,/false.*not-observed/s);
+    assert.match(doc.querySelector('#detail').textContent,/1 unknown alternative/,
+      'status count is ambiguous without identifying what is counted');
     doc.querySelector('#application-overview').scrollTop=0;
     assert.match(doc.querySelector('#detail').textContent,/not.*chronolog|not.*sequence/i);
     assert.match(doc.querySelector('#detail').textContent,/runtime truncated/);
@@ -81,5 +84,32 @@ test('architectural home navigates context, components and alternatives with sou
     vm.runInContext('report.unitEvidence.allTests=true;report.unitEvidence.runs[0].selection.tests=[];render();',dom.getInternalVMContext());
     assert.match(doc.querySelector('#detail').textContent,/all in-scope tests/);
     assert.equal(executions,0);
+  }finally{dom.window.close();}
+});
+
+test('crowded architectural edge labels are omitted from the diagram but retained accessibly',async()=>{
+  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://127.0.0.1:8090/'});
+  dom.window.fetch=async()=>({ok:true,json:async()=>({root:'/repo',module:'app',sourceSHA256:'source',
+    packages:[],symbols:[],files:[],calls:[],documents:[],httpEndpoints:[],warnings:[],limitations:[],commands:[]})});
+  try{
+    const ctx=dom.getInternalVMContext();
+    for(const match of html.matchAll(/<script src="\/([^"]+)"><\/script>/g))
+      vm.runInContext(fs.readFileSync(path.join(__dirname,match[1]),'utf8'),ctx,{filename:match[1]});
+    await new Promise(resolve=>setImmediate(resolve));
+    vm.runInContext(`
+      const root=$('graph');root.replaceChildren();
+      svg('g',{class:'node','data-node-id':'a'},root);
+      svg('g',{class:'node','data-node-id':'b'},root);
+      GoReviewGraph.route=()=>[{x:100,y:30},{x:120,y:30}];
+      attachGraph(new Map([['a',{x:0,y:0}],['b',{x:120,y:0}]]),
+        [{from:'a',to:'b',architecture:true,label:'a crowded architecture contract label',description:'contract detail'}],
+        100,60,'crowded-architecture-label');
+    `,ctx);
+    const doc=dom.window.document;
+    assert.equal(doc.querySelectorAll('#graph .edge-label').length,0,
+      'an unavailable non-overlapping label position fell back to overlapping text');
+    assert.match(doc.querySelector('#graph path.edge title').textContent,/crowded architecture contract label/,
+      'omitted crowded edge label is not available in its accessible description');
   }finally{dom.window.close();}
 });

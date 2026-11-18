@@ -92,7 +92,7 @@ function systemFlowDetail(scene) {
   }
   const counts=new Map();
   for(const alternative of scene.alternatives)counts.set(alternative.execution,(counts.get(alternative.execution)||0)+1);
-  el('p',[...counts].map(([state,count])=>count+' '+state).join(' · ')||'No relevant alternatives in this selection.',$('detail'),'muted');
+  el('p',[...counts].map(([state,count])=>count+' '+state+' alternative'+(count===1?'':'s')).join(' · ')||'No relevant alternatives in this selection.',$('detail'),'muted');
   if(component) {
     el('h3','Relevant operation alternatives',$('detail'));
     if(scene.alternatives.length<=50||operation) {

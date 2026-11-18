@@ -36,7 +36,7 @@ function attachGraph(coords,edges,width,height,key){
         class:'edge control-edge '+color+(edge.indirect?' indirect':'')+(route.obstructed?' obstructed':'')+
           (edge.kind==='loop'||coords.get(edge.to).y<coords.get(edge.from).y?' backedge':''),
         'marker-end':`url(#scene-arrow-${color})`},layer);
-      svg('title',{},path).textContent=(edge.description||edge.label||edge.kind||'Static relationship')+(route.obstructed?' · overlapping nodes obstruct this edge; drag nodes apart':'');
+      svg('title',{},path).textContent=(edge.label?edge.label+' · ':'')+(edge.description||edge.kind||'Static relationship')+(route.obstructed?' · overlapping nodes obstruct this edge; drag nodes apart':'');
       if(edge.label){
         let length=-1,a,b;
         for(let j=1;j<route.length;j++){
@@ -52,6 +52,8 @@ function attachGraph(coords,edges,width,height,key){
           const placement=edge.architecture?GoReviewGraph.labelPosition(route,labelWidth,rectangles,labels,offset):null;
           if(placement) {
             labels.push(placement);x=placement.x+placement.w/2;y=placement.y+12;anchor='middle';
+          } else if(edge.architecture) {
+            return;
           }
           const text=svg('text',{x,y,'text-anchor':anchor,class:'edge-label '+color},layer);text.textContent=edge.label;
           if(edge.architecture) {

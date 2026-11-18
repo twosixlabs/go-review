@@ -222,6 +222,31 @@ func TestQualityMCPInspectsEntryPointDocuments(t *testing.T) {
 	}
 }
 
+func TestQualityMCPReviewTestsDescriptionUsesInspectionAuthorization(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	for _, tool := range options.Tools {
+		if tool.Function.Name != "review_tests" {
+			continue
+		}
+		if !strings.Contains(tool.Function.Description, "any selected test") ||
+			!strings.Contains(tool.Function.Description, "complete source") ||
+			strings.Contains(tool.Function.Description, "only explicitly assigned tests") {
+			t.Fatalf("review_tests description contradicts recording authorization: %s", tool.Function.Description)
+		}
+		return
+	}
+	t.Fatal("review_tests tool is unavailable")
+}
+
 func TestQualityMCPPinsReadOnlyToolsToAssessment(t *testing.T) {
 	source := "package example\nfunc F() int {return 1}\n"
 	report := &review.Report{Module: "example", Files: []review.File{{ID: "source", Path: "sample.go", Package: "example", Source: source, SHA256: testquality.Digest([]byte(source))}}}

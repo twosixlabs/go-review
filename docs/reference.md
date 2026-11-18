@@ -983,13 +983,16 @@ agreement between individual and collective scores.
 Assessment requests follow the job owner's cancellation rather than the
 interactive chat timeout. Conversations honor explicitly configured step and
 context limits. Each conversation has stable system instructions and a separate
-user task/assignment. Native assessments request at most 32000 output tokens by
-default; `maxOutputTokens` configures that allowance. Optional `contextTokens`
-supplies the provider/model window: a conservative one-token-per-encoded-byte
-input estimate, plus 1024 template tokens and at least 256 output tokens, bounds
-both input compaction and the remaining generation allowance. This is not a
-tokenizer or automatic model-capability discovery; leave it unset when unknown.
-`contextBytes` remains an independent input bound.
+user task/assignment. Native Test Quality agent conversations request at most
+32000 output tokens by default; `maxOutputTokens` configures that allowance.
+Optional `contextTokens` supplies the provider/model window: a conservative
+one-token-per-encoded-byte input estimate, plus 1024 template tokens and at
+least 256 output tokens, bounds both input compaction and the remaining
+generation allowance for those conversations. This is not a tokenizer or
+automatic model-capability discovery; leave it unset when unknown. The
+project-wide Test Quality assessment provider uses an unbounded-output path, so
+`maxOutputTokens` and `contextTokens` do not bound its provider requests. Its
+step limit and configured `contextBytes` input budget remain separate controls.
 Compaction preserves the system/task prefix, a byte-bounded checkpoint of saved
 records/delegated handles, and complete recent assistant/tool turns. Earlier
 records remain durably queryable rather than growing the checkpoint indefinitely.

@@ -667,11 +667,16 @@ Use the actual server URL and model identifier. The model must support native
 function-tool calling. Restart Go Review after changing configuration.
 Missing configuration or `"enabled": false` disables the assistant.
 Optional `maxOutputTokens` sets the generation allowance (256–256000).
-Native Test Quality conversations default to 32000; ordinary chat defaults to
-8192. Optional `contextTokens` supplies the model's context window; without a
-model tokenizer, Go Review conservatively reserves one token per encoded input
-byte plus template/output headroom. It is not automatically discovered.
-`contextBytes` remains an independent input-size limit.
+Native Test Quality agent conversations default to 32000; ordinary chat
+defaults to 8192. Project-wide Test Quality assessments use a separate
+unbounded-output provider path: `maxOutputTokens` and `contextTokens` do not
+bound those provider requests. Assessment step limits and any configured
+`contextBytes` input budget remain separate controls. For bounded chat and
+Test Quality agent conversations, optional `contextTokens` supplies the model's
+context window; without a model tokenizer, Go Review conservatively reserves one
+token per encoded input byte plus template/output headroom. It is not
+automatically discovered. `contextBytes` remains an independent input-size
+limit.
 
 For an authenticated external provider:
 

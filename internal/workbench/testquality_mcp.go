@@ -38,7 +38,7 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 		Offset     int    `json:"offset,omitempty"`
 		Limit      int    `json:"limit,omitempty"`
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "review_tests", Description: "Discover SELECTED TESTS by exact package or name, including qualified identities, module-relative file paths and exact source ranges. Copy returned paths/IDs; do not guess filenames. Available to lead and children. This is the assessment selection, not production symbols or current grading progress. Listing does not grant recording authority; children may record only explicitly assigned tests.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+	mcp.AddTool(server, &mcp.Tool{Name: "review_tests", Description: "Discover SELECTED TESTS by exact package or name, including qualified identities, module-relative file paths and exact source ranges. Copy returned paths/IDs; do not guess filenames. Available to lead and children. This is the assessment selection, not production symbols or current grading progress. Listing does not grant recording authority; any agent may record any selected test after inspecting its complete source.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input testsInput) (*mcp.CallToolResult, map[string]any, error) {
 			if service.pinned[input.SnapshotID] == nil {
 				return nil, nil, fmt.Errorf("unknown assessment-pinned snapshot")

@@ -384,7 +384,7 @@ func (s *Server) runChat(ctx context.Context, cfg intelligence.Config, request c
 			s.qualityMu.Unlock()
 			return err
 		}
-		list, listErr := s.qualityStore.List(root)
+		list, listErr := s.qualityStore.ListSummaries(root)
 		s.qualityMu.Unlock()
 		if listErr != nil {
 			return listErr

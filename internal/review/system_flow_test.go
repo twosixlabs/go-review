@@ -190,6 +190,47 @@ func cycle() { helper() }
 	}
 }
 
+func TestSystemFlowMergesInformationFromCallsToSameBoundary(t *testing.T) {
+	report := analyzeOperationSourceFixture(t, map[string]string{
+		"source.go": `package source
+import "encoding/json"
+type State struct { Value int }
+type Report struct { Value string }
+type Comparison struct{}
+func (*Comparison) State(data []byte) { var state State; _ = json.Unmarshal(data, &state) }
+func (*Comparison) Report(data []byte) { var report Report; _ = json.Unmarshal(data, &report) }
+`,
+	}, nil)
+	flow := readSystemFlow(t, report)
+	names := map[string]string{}
+	for _, component := range flow.Components {
+		names[component.ID] = component.Name
+	}
+	for _, exchange := range flow.Exchanges {
+		if names[exchange.From] != "Comparison" || names[exchange.To] != "json" {
+			continue
+		}
+		foundState, foundReport := false, false
+		for _, info := range exchange.Information {
+			foundState = foundState || strings.HasSuffix(info.Type, ".State")
+			foundReport = foundReport || strings.HasSuffix(info.Type, ".Report")
+		}
+		if len(exchange.Sources) != 2 || !foundState || !foundReport {
+			t.Fatalf("grouped exchange lost later call contracts: %+v", exchange)
+		}
+		return
+	}
+	t.Fatalf("missing Comparison to json exchange: %+v", flow.Exchanges)
+}
+
+func TestFlowTypeNamePreservesAnonymousCompositeTypes(t *testing.T) {
+	typ := "struct{sync.Once; err error}"
+	pkg, name := flowTypeName(typ)
+	if pkg != "" || name != typ {
+		t.Fatalf("anonymous composite was split into package/type: %q %q", pkg, name)
+	}
+}
+
 func TestSystemFlowGroupsExternalCapabilitiesAndRetainsUnknownIngress(t *testing.T) {
 	r := analyzeOperationSourceFixture(t, map[string]string{
 		"source.go": `package source

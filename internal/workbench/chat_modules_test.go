@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/review"
+	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
 func TestAgentExploresRetainedModulesWithoutChangingSelection(t *testing.T) {
@@ -18,6 +21,31 @@ func TestAgentExploresRetainedModulesWithoutChangingSelection(t *testing.T) {
 	second := &review.Report{Module: "second", Root: "/repo/second", Documents: []review.Document{{ID: "purpose", Text: "Second module evidence"}}}
 	s := New(first)
 	s.review = &review.RepositoryReview{Modules: []review.ReviewedModule{{Directory: first.Root, Report: first}, {Directory: second.Root, Report: second}}}
+	s.qualityStore = testquality.Store{Directory: filepath.Join(t.TempDir(), "archive")}
+	assessment, err := s.qualityStore.Create(t.Context(), &review.RepositoryReview{
+		Root: first.Root, Modules: []review.ReviewedModule{{Directory: first.Root, Report: first}},
+	}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment.Status = "completed"
+	if err := s.qualityStore.Save(assessment); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(s.qualityStore.Directory, assessment.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "assessment.json" {
+			if err := os.Remove(filepath.Join(s.qualityStore.Directory, assessment.ID, entry.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := s.qualityStore.List(first.Root); err == nil {
+		t.Fatal("broken pinned artifacts did not make full assessment loading fail")
+	}
 	service := s.newChatService()
 	snapshot, _, err := service.snapshot("", "first")
 	if err != nil {
@@ -33,9 +61,19 @@ func TestAgentExploresRetainedModulesWithoutChangingSelection(t *testing.T) {
 		calls++
 		var request struct {
 			Messages []intelligence.Message `json:"messages"`
+			Tools    []intelligence.Tool    `json:"tools"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
+		}
+		if calls == 1 {
+			found := false
+			for _, tool := range request.Tools {
+				found = found || tool.Function.Name == "review_test_quality"
+			}
+			if !found {
+				t.Error("chat omitted saved Test Quality when pinned evidence could not be loaded")
+			}
 		}
 		delta := map[string]any{"content": "Explained"}
 		finish := "stop"
@@ -46,6 +84,7 @@ func TestAgentExploresRetainedModulesWithoutChangingSelection(t *testing.T) {
 		} else if !strings.Contains(request.Messages[len(request.Messages)-1].Content, "Second module evidence") {
 			t.Error("did not retrieve real second-module evidence")
 		}
+
 		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": delta, "finish_reason": finish}}})
 		fmt.Fprintf(w, "data: %s\n\n", data)
 	}))

@@ -2,7 +2,7 @@
 #change-workspace[hidden] { display:none; }
 body.change-review-open { height:auto; min-height:100dvh; overflow:auto; }
 body.change-review-open #change-workspace { flex:none; }
-body.change-review-open main,body.change-review-open .function-views,body.change-review-open #advanced-tools { display:none; }
+body.visual-workspace.change-review-open main,body.visual-workspace.change-review-open .function-views,body.visual-workspace.change-review-open #advanced-tools { display:none; }
 body.change-review-open.chat-open #change-workspace { margin-right:clamp(380px,32vw,620px); }
 .change-header { display:flex; flex-wrap:wrap; align-items:center; gap:8px; background:transparent; color:inherit; padding:8px 0; }
 .change-header h2 { font-size:1.1rem; margin:0 auto 0 0; }

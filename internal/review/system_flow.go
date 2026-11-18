@@ -238,6 +238,18 @@ func BuildSystemFlow(r *Report) *SystemFlow {
 		e := exchanges[key]
 		e.Sources = append(e.Sources, call.Anchor.Location)
 		e.CallIDs = append(e.CallIDs, call.CallID)
+		for _, info := range information {
+			found := false
+			for _, existing := range e.Information {
+				if existing == info {
+					found = true
+					break
+				}
+			}
+			if !found {
+				e.Information = append(e.Information, info)
+			}
+		}
 	}
 	ingressSeen := map[string]bool{}
 	for _, endpoint := range r.HTTPEndpoints {
@@ -285,8 +297,21 @@ func BuildSystemFlow(r *Report) *SystemFlow {
 }
 
 func flowTypeName(typ string) (string, string) {
-	if i := strings.LastIndex(typ, "."); i >= 0 {
-		return typ[:i], typ[i+1:]
+	depth, lastDot := 0, -1
+	for i, r := range typ {
+		switch r {
+		case '{', '[', '(':
+			depth++
+		case '}', ']', ')':
+			depth--
+		case '.':
+			if depth == 0 {
+				lastDot = i
+			}
+		}
+	}
+	if lastDot >= 0 {
+		return typ[:lastDot], typ[lastDot+1:]
 	}
 	return "", typ
 }
