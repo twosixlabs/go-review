@@ -374,6 +374,10 @@ New analysis retains one entry inventory for the visual overview, MCP and chat:
   evidence. Host imports are not incoming entry points. Verified generated
   export bindings link contracts to Go implementations; unresolved contracts
   remain visible with their reason instead of falling back to an empty `main`.
+  Go export discovery requires exact directive comments with one export name.
+  `//go:wasmexport` establishes Wasm evidence; generic `//export` requires an
+  independent Wasm target, component configuration, WIT or `go:wasmexport`.
+  Ordinary prose and marker strings do not classify a project as Wasm.
 - **CLI programs:** `main` in each main package. Exported helpers in the same
   application module do not become library entry points.
 - **Standalone library modules:** exported functions and methods on exported

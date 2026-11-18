@@ -15,6 +15,7 @@ func TestEntryPointsClassifyCLIServiceAndStandaloneLibrary(t *testing.T) {
 		{"cli", "package main\nfunc main() { panic(\"must not execute\") }\nfunc init() {}\nfunc PublicHelper() {}", "cli", 1},
 		{"missing-main", "package main\nfunc init() {}\nfunc PublicHelper() {}", "cli", 0},
 		{"service", "package main\nimport \"net/http\"\nfunc main(){ http.HandleFunc(\"GET /\", Handle) }\nfunc Handle(http.ResponseWriter,*http.Request){}", "service", 2},
+		{"service with export prose", "package main\nimport \"net/http\"\nfunc main(){ http.HandleFunc(\"GET /\", Handle) }\n// Entry provenance can change outside its handler (HTTP wiring, WIT contract,\n// export directive). Associate exact changed spans, not the whole registering\n// function, so unrelated routes sharing a handler are not all marked changed.\nfunc Handle(http.ResponseWriter,*http.Request){}", "service", 2},
 		{"wasm-http", "package main\nimport \"net/http\"\nfunc main(){ http.HandleFunc(\"GET /\", Handle) }\nfunc Handle(http.ResponseWriter,*http.Request){}", "wasm", 2},
 		{"library", "package fixture\nfunc Public(){}\nfunc private(){}\ntype API struct{}\nfunc(API) Invoke(){}\nfunc(API) hidden(){}\ntype hidden struct{}\nfunc(hidden) Visible(){}", "library", 2},
 	} {

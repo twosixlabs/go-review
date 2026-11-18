@@ -102,6 +102,13 @@ func TestWasmEntryNoMainFallbackAndSDK(t *testing.T) {
 		count        int
 	}{
 		{"ordinary", "package main\nfunc main() {}\n", false, 0},
+		{"export prose", "package main\n// Entry provenance can change outside its handler (HTTP wiring, WIT contract,\n// export directive). Associate exact changed spans, not the whole registering\n// function, so unrelated routes sharing a handler are not all marked changed.\nfunc main() {}\n", false, 0},
+		{"unspaced export prose", "package main\n//export directive). Associate exact changed spans.\nfunc main() {}\n", false, 0},
+		{"spaced go directive", "package main\n// go:wasmexport handle\nfunc handle() {}\n", false, 0},
+		{"invalid go directive", "package main\n//go:wasmexport handle extra\nfunc handle() {}\n", false, 0},
+		{"cgo export", "package main\nimport \"C\"\n//export handle\nfunc handle() {}\nfunc main() {}\n", false, 0},
+		{"legacy export without wasm context", "package main\n//export handle\nfunc handle() {}\n", false, 0},
+		{"oversized source with marker string", "package main\n" + strings.Repeat("// padding\n", wasmSourceLimit/10) + "var example = \"//go:wasmexport not-a-directive\"\nfunc main() {}\n", false, 0},
 		{"sdk", "package main\n//go:wasmexport wasi:http/incoming-handler@0.2.0#handle\nfunc handle() {}\n//export cabi_post_handle\nfunc post() {}\nfunc main() {}\n", true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,6 +124,33 @@ func TestWasmEntryNoMainFallbackAndSDK(t *testing.T) {
 			}
 			if inv != nil && (len(inv.Entries) != tc.count || len(inv.Limitations) == 0) {
 				t.Fatalf("inventory=%#v", inv)
+			}
+		})
+	}
+}
+
+func TestWasmEntryLegacyExportRequiresIndependentWasmEvidence(t *testing.T) {
+	for _, mode := range []string{"target", "config", "wit"} {
+		t.Run(mode, func(t *testing.T) {
+			config := map[string]string{}
+			switch mode {
+			case "config":
+				config["componentize-go.toml"] = "worlds = []\n"
+			case "wit":
+				config["wit/world.wit"] = "package test:app; world app { export handle: func(); }"
+			}
+			r := wasmFixture(t, config)
+			if mode == "target" {
+				r.Environment = map[string]string{"GOARCH": "wasm", "GOOS": "wasip1"}
+			}
+			r.Files = []File{{ID: "f", Path: "main.go", Source: "package main\n//export handle\nfunc handle() {}\n"}}
+			r.Symbols = []Symbol{{ID: "handle", Name: "handle", Location: Location{FileID: "f", Line: 3, EndLine: 3}}}
+			inv, err := collectWasmEntryPoints(t.Context(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inv == nil || inv.Kind != "wasm" || len(inv.Entries) != 1 || inv.Entries[0].SymbolID != "handle" {
+				t.Fatalf("valid legacy Wasm export lost: %#v", inv)
 			}
 		})
 	}

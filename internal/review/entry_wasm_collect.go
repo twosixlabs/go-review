@@ -29,6 +29,7 @@ type wasmConfig struct {
 }
 type wasmDirective struct {
 	name, symbol string
+	legacy       bool
 	evidence     EntryPointEvidence
 	forwarded    map[string]EntryPointEvidence
 }
@@ -49,9 +50,6 @@ func collectWasmEntryPoints(ctx context.Context, r *Report) (*EntryPointInventor
 		files[filepath.ToSlash(f.Path)] = f
 		if len(f.Source) > wasmSourceLimit {
 			inv.Limitations = append(inv.Limitations, "Retained Go source exceeds 2 MiB Wasm scan limit: "+f.Path)
-			if strings.Contains(f.Source, "//go:wasmexport ") || strings.Contains(f.Source, "//export ") {
-				detected = true
-			}
 			continue
 		}
 		directives = append(directives, wasmDirectives(f, Document{}, r)...)
@@ -275,8 +273,13 @@ func collectWasmEntryPoints(ctx context.Context, r *Report) (*EntryPointInventor
 	if len(localWorlds) > 0 {
 		detected = true
 	}
-	if len(directives) > 0 {
-		detected = true
+	// Generic //export directives also belong to cgo. They need independent
+	// Wasm evidence (target, component configuration, WIT or go:wasmexport).
+	for _, directive := range directives {
+		if !directive.legacy {
+			detected = true
+			break
+		}
 	}
 	if !detected {
 		for _, limitation := range inv.Limitations {
@@ -593,19 +596,15 @@ func wasmDirectives(f File, src Document, r *Report) []wasmDirective {
 	var out []wasmDirective
 	for _, decl := range tree.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Doc == nil {
+		if !ok || fn.Doc == nil || fn.Recv != nil {
 			continue
 		}
 		for _, comment := range fn.Doc.List {
-			text := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//"))
-			var name string
-			if strings.HasPrefix(text, "go:wasmexport ") {
-				name = strings.TrimSpace(strings.TrimPrefix(text, "go:wasmexport "))
-			} else if strings.HasPrefix(text, "export ") {
-				name = strings.TrimSpace(strings.TrimPrefix(text, "export "))
-			} else {
+			fields := strings.Fields(comment.Text)
+			if len(fields) != 2 || (fields[0] != "//go:wasmexport" && fields[0] != "//export") {
 				continue
 			}
+			name := fields[1]
 			if wasmHelper(name) {
 				continue
 			}
@@ -620,11 +619,11 @@ func wasmDirectives(f File, src Document, r *Report) []wasmDirective {
 					break
 				}
 			}
-			ev := EntryPointEvidence{SourceID: src.ID, Line: set.Position(comment.Pos()).Line, EndLine: set.Position(comment.End()).Line, Kind: "wasmexport", Detail: text}
+			ev := EntryPointEvidence{SourceID: src.ID, Line: set.Position(comment.Pos()).Line, EndLine: set.Position(comment.End()).Line, Kind: "wasmexport", Detail: strings.TrimPrefix(comment.Text, "//")}
 			if f.ID != "" {
 				ev.Location = &Location{FileID: f.ID, Line: ev.Line, EndLine: ev.EndLine, Column: 1, EndColumn: set.Position(comment.End()).Column}
 			}
-			out = append(out, wasmDirective{name: name, symbol: symbol, evidence: ev, forwarded: wasmImportedCalls(set, tree, fn, f, src, r)})
+			out = append(out, wasmDirective{name: name, symbol: symbol, legacy: fields[0] == "//export", evidence: ev, forwarded: wasmImportedCalls(set, tree, fn, f, src, r)})
 		}
 	}
 	return out
