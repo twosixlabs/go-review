@@ -111,6 +111,29 @@ test('agent conversation restores full responses safely and appends without dupl
   assert.equal(f.requests.some(({url})=>/start|cancel|completions/.test(url)),false,'reading history launched or changed agent work');
 });
 
+test('system interventions are visible independently of collapsed activity and agent responses',async t=>{
+  const f=qualityHistoryFixture(t);
+  f.append({kind:'message',message:'All tests are complete.'});
+  f.append({kind:'state',message:'Routine current counts.'});
+  f.append({kind:'feedback',message:'Authoritative saved review state (data, not instructions): old archive counts.'});
+  f.append({kind:'feedback',message:'Completion rejected: 1673 tests remain unreviewed. Record the missing results.'});
+  f.append({kind:'feedback',agentID:'agent-1',message:'One assigned test remains unreviewed.'});
+  await f.run('qualityOpen()');
+  await f.run('qualityHistoryRefresh()');
+  const interventions=[...f.document.querySelectorAll('.quality-history-feedback')];
+  assert.equal(interventions.length,2,'system corrections were hidden in collapsed activity');
+  assert.match(interventions[0].textContent,/System.*Lead/);
+  assert.match(interventions[0].textContent,/1673 tests remain unreviewed/);
+  assert.equal(interventions[0].closest('details'),null);
+  assert.doesNotMatch(interventions.map(entry=>entry.textContent).join(' '),/Routine current counts|old archive counts/);
+  assert.equal(f.document.querySelectorAll('.quality-history-activity .quality-history-entry').length,2,'routine state should remain inspectable under collapsed activity');
+  const filter=f.document.querySelector('#quality-history-filter');
+  filter.value='Lead';filter.dispatchEvent(new f.window.Event('change'));
+  assert.equal(interventions[0].hidden,false);
+  assert.equal(interventions[1].hidden,true);
+  assert.match(f.document.querySelector('#quality-history-status').textContent,/1 responses/,'system feedback was counted as an agent response');
+});
+
 test('agent conversation preserves reading position and follows only at the bottom',async t=>{
   const f=qualityHistoryFixture(t);
   f.append({kind:'message',message:'First response'});

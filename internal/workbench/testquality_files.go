@@ -264,7 +264,7 @@ func qualityFileCall(ctx context.Context, report *review.Report, input qualityFi
 			end = min(len(lines), start+99)
 		}
 		if start < 1 || end < start || end > len(lines) || end-start >= 500 {
-			return nil, fmt.Errorf("select an existing range of at most 500 lines")
+			return nil, fmt.Errorf("source range %d-%d is invalid for %s (%d lines; request 1-500 valid lines)", start, end, input.Path, len(lines))
 		}
 		chars := []rune(strings.Join(lines[start-1:end], "\n"))
 		if input.TextOffset < 0 || input.TextOffset > len(chars) || input.TextLimit < 0 || input.TextLimit > 24000 {
@@ -281,8 +281,10 @@ func qualityFileCall(ctx context.Context, report *review.Report, input qualityFi
 				next = &stop
 			}
 			data := map[string]any{"source": input.Source, "path": input.Path, "sha256": testquality.Digest([]byte(text)), "snapshotMatch": match, "fileID": pinned.id, "startLine": start, "endLine": end, "text": string(chars[input.TextOffset:stop]), "textPage": map[string]any{"offset": input.TextOffset, "nextOffset": next, "total": len(chars)}}
-			if match && input.TextOffset == 0 && next == nil {
-				data["citation"] = testquality.Citation{SnapshotID: input.SnapshotID, FileID: pinned.id, StartLine: start, EndLine: end}
+			if match {
+				if citation := qualityTextCitation(input.SnapshotID, pinned.id, start, chars, input.TextOffset, stop); citation != nil {
+					data["citation"] = citation
+				}
 			}
 			raw, err := json.Marshal(data)
 			if err != nil {

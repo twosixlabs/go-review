@@ -174,6 +174,9 @@ func (s Store) Create(ctx context.Context, run *review.RepositoryReview, provide
 	if _, err := AggregateVersion(a.Version, a.Items); err != nil {
 		return nil, err
 	}
+	if err := s.reuseSaved(ctx, a); err != nil {
+		return nil, err
+	}
 	if err := (Store{Directory: staging}).Save(a); err != nil {
 		return nil, err
 	}

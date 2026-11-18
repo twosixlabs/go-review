@@ -239,7 +239,11 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 			fileID, original, base := source.Data.FileID, "", source.Data.StartLine
 			if name == "review_document" {
 				fileID, base = source.Data.ID, 1
-				for _, document := range report.Documents {
+				documents := append([]review.Document(nil), report.Documents...)
+				if report.EntryPoints != nil {
+					documents = append(documents, report.EntryPoints.Sources...)
+				}
+				for _, document := range documents {
 					if document.ID == fileID {
 						original = document.Text
 					}
@@ -268,16 +272,8 @@ func (s *Server) qualityEvidence(ctx context.Context, a *testquality.Assessment,
 			if base < 1 || offset < 0 || end > len(chars) || string(chars[offset:end]) != source.Data.Text {
 				return nil, nil, fmt.Errorf("MCP text does not match pinned source")
 			}
-			startLine := base + strings.Count(string(chars[:offset]), "\n")
-			if offset > 0 && chars[offset-1] != '\n' {
-				startLine++
-			}
-			endLine := base + strings.Count(string(chars[:end]), "\n")
-			if source.Data.Page != nil && source.Data.Page.NextOffset != nil {
-				endLine--
-			}
-			if startLine <= endLine {
-				citations = append(citations, testquality.Citation{SnapshotID: id, FileID: fileID, StartLine: startLine, EndLine: endLine})
+			if citation := qualityTextCitation(id, fileID, base, chars, offset, end); citation != nil {
+				citations = append(citations, *citation)
 			}
 		}
 		return data, citations, nil

@@ -532,8 +532,34 @@ One primary review agent owns the investigation, chooses what to inspect next,
 and optionally delegates focused work to up to three children (four agents total).
 It evaluates their reports, can redirect or recover from failed investigations,
 and owns the overall suite judgment. Completed observations are saved as review
-progresses. A completion tool returns missing assessments, project judgment or
+progresses. Test citations may include surrounding inspected source; the complete
+test declaration must still be inspected. Delegated lists guide work, not
+permission to submit a test review: any agent, including a research child, may
+record any selected test whose complete source it inspected. Recording errors
+identify mismatched identities, unrelated citations or the missing source range
+rather than treating every rejection as a failed source read.
+Delegation returns immediately. Children deliver completion/error notifications;
+the lead keeps working independently or yields until a child finishes.
+Compound evidence reads page, filter and group inventories before they enter the
+model context. A completion tool returns missing assessments, project judgment or
 active children to the same primary conversation rather than ending it early.
+Children with assigned test deliverables validate those records before finishing.
+The system automatically supplies saved progress and child failures, responds to
+premature completion, and permits one recovery attempt after an empty model reply.
+It also interrupts clear repeated-paragraph generation loops while text is still
+streaming, gives that conversation one corrective retry, then stops it explicitly
+if it loops again. Saved judgments and earlier inspected evidence are retained.
+Corrective system interventions are visible in the conversation history; routine
+saved-progress updates stay in collapsed **Activity** groups.
+New assessments reuse saved individual judgments, including partial work from
+failed reviews, only when all retained project inputs match. This conservative
+check includes production/test/supporting source, documentation, dependency
+inputs, scope and analysis environment across modules. Any mismatch starts fresh;
+this is not fine-grained dependency-aware reuse. Imported judgments retain their
+original assessment/provider/model and cite the new pinned snapshot. Unfinished
+work stays unreviewed; project synthesis and fresh diagnostic permissions/results
+are not imported. Select a test to see its original assessment and model when
+its judgment was reused.
 Lead and children share selected-test discovery and path-based file listing,
 reading and literal search. Retained evidence is the default; read-only live
 project files are explicitly labelled, and changed/new files cannot supply pinned
@@ -541,8 +567,10 @@ grading citations. Assignments, agent messages, tool calls/results and original
 errors are recorded for inspection. The right-hand **Agent conversation** panel
 shows full lead and child responses as they arrive, with agent/time labels, a
 lead-only filter and expandable activity/errors. It preserves your reading
-position; **Jump to latest** resumes following new updates. Saved assessments
-reopen their retained history without inference; earlier assessments without
+position; **Jump to latest** resumes following new updates. Corrective messages
+are labelled **System to Lead** or **System to agent-N**, separate from agent
+responses; routine saved-progress notifications remain collapsed. Saved
+assessments reopen their retained history without inference; earlier assessments without
 recorded history say so explicitly. The panel is read-only, not an input to the
 lead agent. History is also available through the assessment query API
 (`events` and `event` operations).
@@ -638,6 +666,12 @@ Example for a local OpenAI-compatible server:
 Use the actual server URL and model identifier. The model must support native
 function-tool calling. Restart Go Review after changing configuration.
 Missing configuration or `"enabled": false` disables the assistant.
+Optional `maxOutputTokens` sets the generation allowance (256–256000).
+Native Test Quality conversations default to 32000; ordinary chat defaults to
+8192. Optional `contextTokens` supplies the model's context window; without a
+model tokenizer, Go Review conservatively reserves one token per encoded input
+byte plus template/output headroom. It is not automatically discovered.
+`contextBytes` remains an independent input-size limit.
 
 For an authenticated external provider:
 

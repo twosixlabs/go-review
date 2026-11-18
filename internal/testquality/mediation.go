@@ -212,11 +212,17 @@ func derivedJudgmentStatus(ratings []Rating, priorReason string) (Status, string
 // The job owns the evidence session and its lifetime. Reads return only
 // citations for source actually supplied, not retrieval candidates.
 type JudgmentOptions struct {
+	Task     string
 	Retrieve RetrievalFunc
 	Tools    []intelligence.Tool
 	Read     func(context.Context, string, json.RawMessage) (json.RawMessage, []Citation, error)
 	Trace    func(ReviewTrace) error
-	// Finish validates required deliverables. When set, the native primary
+	// State supplies authoritative saved progress and child outcomes as data.
+	State func() (json.RawMessage, error)
+	// Notifications drains child completions. Only an idle conversation waits;
+	// the owner releases the wait on completion, shutdown or cancellation.
+	Notifications func(context.Context, bool) (json.RawMessage, error)
+	// Finish validates required deliverables. When set, the native agent
 	// conversation can end successfully only through finish_review.
 	Finish func() error
 	// The job owner checkpoints completed collective groups before synthesis.

@@ -274,4 +274,37 @@ func TestQualityFinishesAndQueriesSavedEvidence(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"symbolID":"TestF"`) {
 		t.Fatalf("reopened: %s", w.Body.String())
 	}
+	previousID := launch.ID
+	s.review.Modules[0].Report.GeneratedAt = time.Now()
+	var repeated atomic.Int32
+	s.qualityAssess = func(_ context.Context, _ *testquality.Assessment, item testquality.Responsibility, _ intelligence.Config) (testquality.Responsibility, error) {
+		repeated.Add(1)
+		return item, fmt.Errorf("unchanged saved work was unnecessarily reassessed")
+	}
+	w = qualityRequest(t, s, "/api/test-quality/start", `{}`)
+	if w.Code != 202 {
+		t.Fatal(w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &launch); err != nil {
+		t.Fatal(err)
+	}
+	s.qualityMu.Lock()
+	job = s.qualityJobs[launch.ID]
+	s.qualityMu.Unlock()
+	select {
+	case <-job.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("new assessment did not finish")
+	}
+	saved, err := s.qualityStore.Load(launch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This fixture has no collective provider: saved individual work survives
+	// its failure, but must not make the new assessment falsely complete.
+	if launch.ID == previousID || saved.Status != "failed" || !strings.Contains(saved.Error, "model request") || repeated.Load() != 0 ||
+		saved.Items[0].Status != testquality.StatusScored || saved.Items[0].ReusedFrom == nil ||
+		saved.Items[0].ReusedFrom.AssessmentID != previousID {
+		t.Fatalf("new job did not preserve validated saved progress: %+v", saved)
+	}
 }

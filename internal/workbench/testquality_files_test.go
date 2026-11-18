@@ -100,6 +100,35 @@ func TestQualityAgentFilePagesBoundEncodedOutput(t *testing.T) {
 	}
 }
 
+func TestQualityAgentFilePagesRetainCompleteLineAuthority(t *testing.T) {
+	s := qualityFixture(t)
+	report := s.review.Modules[0].Report
+	report.Files[0].Source = "package example\n// " + strings.Repeat("x", 13000) + "\n"
+	report.Files[0].SHA256 = testquality.Digest([]byte(report.Files[0].Source))
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	for _, tool := range []string{"review_source", "review_read_file"} {
+		args := map[string]any{"snapshotID": a.Reports[0].SnapshotID, "startLine": 1, "endLine": 3, "textLimit": 64}
+		if tool == "review_source" {
+			args["fileID"] = "f"
+		} else {
+			args["path"] = "f.go"
+		}
+		raw, _ := json.Marshal(args)
+		_, seen, err := options.Read(t.Context(), tool, raw)
+		if err != nil || len(seen) != 1 || seen[0].StartLine != 1 || seen[0].EndLine != 1 {
+			t.Fatalf("%s lost completely returned lines or authorized a partial line: %+v %v", tool, seen, err)
+		}
+	}
+}
+
 func TestQualityAgentFileBrowsingRejectsPrivateSymlinkAliases(t *testing.T) {
 	s := qualityFixture(t)
 	root := s.review.Modules[0].Report.Root

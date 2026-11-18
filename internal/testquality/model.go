@@ -53,15 +53,16 @@ type Rating struct {
 }
 
 type Responsibility struct {
-	Identity    Identity  `json:"identity"`
-	Status      Status    `json:"status"`
-	Ratings     []Rating  `json:"ratings,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
-	Name        string    `json:"name"`
-	Package     string    `json:"package"`
-	Findings    []Finding `json:"findings,omitempty"`
-	Declaration Citation  `json:"declaration,omitempty"`
-	TestKind    string    `json:"testKind,omitempty"`
+	Identity    Identity          `json:"identity"`
+	Status      Status            `json:"status"`
+	Ratings     []Rating          `json:"ratings,omitempty"`
+	Reason      string            `json:"reason,omitempty"`
+	Name        string            `json:"name"`
+	Package     string            `json:"package"`
+	Findings    []Finding         `json:"findings,omitempty"`
+	Declaration Citation          `json:"declaration,omitempty"`
+	TestKind    string            `json:"testKind,omitempty"`
+	ReusedFrom  *ReusedAssessment `json:"reusedFrom,omitempty"`
 }
 
 type Citation struct {

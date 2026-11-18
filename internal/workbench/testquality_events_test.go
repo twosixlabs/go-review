@@ -129,11 +129,11 @@ func TestQualityAgentEventHistoryKeepsCancelledChildAssignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"instructions":"Inspect the assigned package only."}`)); err != nil {
+	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"mode":"research","instructions":"Inspect the assigned package only."}`)); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
-	result, _, readErr := p.call(t.Context(), "read_review_agent", json.RawMessage(`{"agentID":"agent-1","wait":true}`))
+	result, _, readErr := qualityChildReport(t, p)
 	if readErr != nil || !strings.Contains(string(result), `"status":"cancelled"`) {
 		t.Fatalf("cancellation misreported: %s %v", result, readErr)
 	}
@@ -158,10 +158,10 @@ func TestQualityAgentEventHistoryRetainsChildAssignmentAndActualErrors(t *testin
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"instructions":"Find the clarification tests and report exact identities."}`)); err != nil {
+	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"mode":"research","instructions":"Find the clarification tests and report exact identities."}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := p.call(t.Context(), "read_review_agent", json.RawMessage(`{"agentID":"agent-1","wait":true}`)); err != nil {
+	if _, _, err := qualityChildReport(t, p); err != nil {
 		t.Fatal(err)
 	}
 	p.close()

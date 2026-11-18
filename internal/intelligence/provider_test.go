@@ -92,6 +92,48 @@ func TestAgentProvider(t *testing.T) {
 	}
 }
 
+func TestAgentProviderHonorsConfiguredModelBudgets(t *testing.T) {
+	for _, window := range []int{0, 2048, 1024} {
+		t.Run(fmt.Sprint(window), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				var request struct {
+					MaxTokens int `json:"max_tokens"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if window == 0 && request.MaxTokens != 16384 {
+					t.Errorf("configured output allowance ignored: %d", request.MaxTokens)
+				}
+				if window > 0 && (request.MaxTokens < 256 || request.MaxTokens >= window) {
+					t.Errorf("output allowance does not fit the model window: %d", request.MaxTokens)
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+			}))
+			defer server.Close()
+			path := filepath.Join(t.TempDir(), "agent.json")
+			data := fmt.Sprintf(`{"enabled":true,"baseURL":%q,"model":"fixture","maxOutputTokens":16384,"contextTokens":%d}`, server.URL, window)
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("cannot configure model budgets: %v", err)
+			}
+			_, err = (Provider{Config: cfg}).Complete(t.Context(), []Message{{Role: "user", Content: "Review."}}, nil, nil)
+			if window == 1024 {
+				if err == nil || !strings.Contains(err.Error(), "context") || requests != 0 {
+					t.Fatalf("exhausted window sent a request: requests=%d error=%v", requests, err)
+				}
+			} else if err != nil || requests != 1 {
+				t.Fatalf("budgeted request failed: requests=%d error=%v", requests, err)
+			}
+		})
+	}
+}
+
 func TestAgentProviderStructuredOutputRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {

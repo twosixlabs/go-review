@@ -903,8 +903,8 @@ One primary review agent owns planning, investigation, delegation and project-wi
 synthesis using assessment-pinned source, documentation and evidence tools.
 `review_progress` discovers selected tests and saved results. The primary can
 inspect and record directly, or use `delegate_review` for focused investigations
-with primary-chosen test identities across packages or modules. Omitting tests
-creates a research-only child. Up to three children can run alongside the primary;
+with primary-chosen test identities across packages or modules. Research mode
+has no required test deliverables. Up to three children can run alongside the primary;
 children cannot delegate or record the project synthesis. There is no automatic
 package scheduling or separate synthesis conversation.
 Prompts direct the primary to delegate small test sets or concrete questions with
@@ -922,37 +922,121 @@ module-relative paths with `snapshotID` and `source: "retained"` (default) or
 execute. Private credential/configuration paths and symlinks are excluded;
 recursive live searches also skip `node_modules` and `.work`. Absence in a
 retained inventory is not proof of filesystem absence. Live reads disclose
-`snapshotMatch`; only unchanged retained bytes and a completely returned line
-range grant pinned citation authority. Changed/new files are contextual evidence.
+`snapshotMatch`; only unchanged retained bytes and completely inspected lines
+grant pinned citation authority. Changed/new files are contextual evidence.
 List/search pages are byte-bounded; search snippets are not source authority.
 Live text files are limited to 2 MiB; discovery to 10,000 entries and searches to
 16 MiB. Budget errors require narrowing the path/pattern. Reads select up to
 500 lines and page text with `textOffset`/`textLimit` and `textPage.nextOffset`.
-`read_review_agent` returns child status, report and actual errors;
+Each source page grants authority for its completely returned lines. Native
+conversations also combine text fragments, including lines split across pages,
+only when all fragments of that range remain in the conversation. Missing or
+compacted-away fragments and pages from different snapshots cannot be combined
+into an inspected range. This applies to source, file and document reads,
+including untransformed source calls inside `review_batch`.
+`review_batch` composes available read-only evidence calls. Each entry supplies
+`tool` and `arguments`. Inventory entries may set `allPages: true` to follow
+`nextOffset`, `match: {"field":"name","contains":"TestDecode"}` for a
+case-insensitive substring filter, `fields: ["identity","name","declaration"]`
+for projection, or `groupBy: "package"` for counts. Dotted field paths are
+supported; projected keys retain the supplied path. Inventory results contain
+`items` or `groups`, `matched`, `pagesRead` and `nextOffset`. Ordinary results
+preserve the underlying response. Batch output is limited to one third of the
+conversation's input budget; oversize results require narrower requests.
+Source reads cannot be filtered, projected, grouped or automatically paginated:
+only their original returned text grants citation authority. A failed batch
+returns its error and grants no source authority. Batches cannot delegate,
+record judgments or execute diagnostics.
+`read_review_agent` immediately returns child status, report and actual errors;
 `cancel_review_agent` stops and joins a child before replacement. Child failures
 are feedback for the primary to evaluate and recover from, not automatic
 cancellation of the review. Child reports do not grant the primary source citation
 authority; it must inspect its own cited source. All agents share execution
 authorization and cumulative diagnostic limits.
 Completed test and optional package judgments are saved immediately.
+Test recording requires inspection of the complete selected declaration and a
+primary citation overlapping it in the same file. The citation may include
+surrounding inspected lines; helpers, production source and documents can be
+cited through `additionalEvidence`. Delegated test lists are work guidance, not
+recording authorization. Test identity is resolved against the assessment, not
+the child's assigned subset. Any agent, including a research child, can record an
+inspected selected test outside its delegated list; unread tests remain rejected.
+Rejections identify wrong snapshot/test/file
+identities, non-overlapping ranges or the first missing source range, with read
+tool parameter guidance. A citation-boundary mismatch is not reported as missing
+inspection.
 `finish_review` accepts completion only when every selected test has an assessment,
 the project collective judgment is recorded, and no children are active. Missing
-requirements are returned to the same ongoing primary conversation. Ordinary
-assistant text cannot end the review. The host validates identity, score range,
+requirements are returned to the same ongoing primary conversation.
+The lead receives each child's completion/error report automatically, with actual
+saved counts. Reading a child never waits or polls. If the lead ends a turn while
+children are still running, the host parks that conversation without making model
+requests and resumes it on a completion notification. Cancellation releases the
+wait. Ordinary text alone does not finish the review. The host validates identity,
+score range,
 inspected-source provenance and completeness, not advisory interpretations or
 agreement between individual and collective scores.
 Assessment requests follow the job owner's cancellation rather than the
 interactive chat timeout. Conversations honor explicitly configured step and
-context limits; compaction retains saved records and delegated handles, and
-requires new source reads for subsequent citations. Repeated unchanged evidence
+context limits. Each conversation has stable system instructions and a separate
+user task/assignment. Native assessments request at most 32000 output tokens by
+default; `maxOutputTokens` configures that allowance. Optional `contextTokens`
+supplies the provider/model window: a conservative one-token-per-encoded-byte
+input estimate, plus 1024 template tokens and at least 256 output tokens, bounds
+both input compaction and the remaining generation allowance. This is not a
+tokenizer or automatic model-capability discovery; leave it unset when unknown.
+`contextBytes` remains an independent input bound.
+Compaction preserves the system/task prefix, a byte-bounded checkpoint of saved
+records/delegated handles, and complete recent assistant/tool turns. Earlier
+records remain durably queryable rather than growing the checkpoint indefinitely.
+Citation authority follows only source retained in those turns; dropped source
+must be read again before citing it. Repeated unchanged evidence
 reads return guidance to reorient the primary; a stalled child stops locally.
+Delegation requires an explicit `assigned-tests` or `research` mode. Assessment
+assignments require exact selected identities. Both modes receive test recording
+tools; research children have no required test list or `finish_review` tool.
+Assessment children, like the lead, must pass `finish_review`:
+ordinary completion prose returns corrective feedback identifying missing saved
+records. Child reports include authoritative saved counts, not just model claims.
+The system supplies changed saved progress and child outcomes to the lead
+automatically before its next model request, including failures it has not polled.
+A completed empty model response gets one recovery attempt per conversation,
+with saved records and citation authority retained. Separately, a stream-time
+guard interrupts consecutive exact repetitions of substantial paragraph blocks,
+without waiting for a finish marker. It inspects prose, not tool-call arguments.
+The partial response and actual interruption error remain in history, but the
+repeating response is not added to the model's ongoing context and its tool calls
+are not executed. The conversation receives one corrective retry with saved work
+and earlier inspected evidence retained; a second generation loop stops that
+investigation explicitly. Only the affected provider request is cancelled.
+Other provider errors are not retried. Both recoveries respect the existing
+cancellation, step and context limits.
 Read errors retain their arguments and original error. Primary resource exhaustion
 leaves a partial assessment; primary provider or persistence failures stop with
 their actual error. Cancellation stops and joins all children. Recorded results
 remain available, and tests without recorded judgments remain unreviewed.
+These jobs do not change host power settings; local inference cannot advance
+while the machine is asleep.
+At creation, a new assessment can import scored individual judgments from earlier
+assessments of the same root and rubric, including failed/interrupted partial
+reviews. Reuse requires identical retained project inputs across all modules:
+source manifests, production/test/supporting files, documentation, dependency
+inputs, scope, tool/schema and analysis environment. Timestamps and artifact
+locations do not invalidate otherwise unchanged inputs. This deliberately
+conservative project-wide comparison does not infer a per-test dependency graph.
+Newest compatible saved records win; older partial reviews fill remaining holes.
+Imported evidence is checked and rebound to the new pinned files/snapshots, with
+original assessment, identity, provider and model retained through reuse chains
+and exposed in test detail. Fresh reassessment replaces that attribution.
+Unfinished/excluded work is not imported. Collective synthesis, execution
+authorization and diagnostic results remain specific to the new assessment.
 Beside the Test Quality summary, **Agent conversation** displays the retained
 lead/child responses chronologically with agent IDs, timestamps and an All / Lead
-filter. Tool activity and errors are grouped in expandable sections; complete
+filter. Corrective interventions display as distinct **System to Lead** /
+**System to agent** messages, not counted as agent responses. Routine saved-state
+updates still reach the model but remain in collapsed activity, including those
+recorded as feedback by earlier versions.
+Tool activity and errors are grouped in expandable sections; complete
 event text is fetched in pages only when requested. Response Markdown uses the
 existing sanitized chat renderer. New messages append without replacing history
 or interrupting a user reading earlier responses; **Jump to latest** resumes

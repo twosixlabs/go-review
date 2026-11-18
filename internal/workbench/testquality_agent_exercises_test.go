@@ -468,9 +468,9 @@ func TestNotSelected(t *testing.T) {if err:=os.WriteFile("unselected-marker",[]b
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := qualityAgentPrompt + string(scope) + "\nThe user authorizes and requests exactly one rerun of TestRerun to verify its current result. Read its source, run it once with run_test_diagnostic (kind rerun, repetitions 1), inspect the returned output, and record its assessment. Do not execute other tests."
+	options.Task = string(scope) + "\nThe user authorizes and requests exactly one rerun of TestRerun to verify its current result. Read its source, run it once with run_test_diagnostic (kind rerun, repetitions 1), inspect the returned output, and record its assessment. Do not execute other tests."
 	group := qualityAgentGroup{SnapshotID: selected.Identity.SnapshotID, Module: selected.Identity.Module, Package: selected.Package, Tests: []testquality.Responsibility{selected}}
-	err = runQualityAgent(ctx, cfg, prompt, options, func(name string, args json.RawMessage, seen []testquality.Citation) error {
+	err = runQualityAgent(ctx, cfg, qualityAgentPrompt, options, func(name string, args json.RawMessage, seen []testquality.Citation) error {
 		return server.recordQualityAgent(a, group, name, args, seen)
 	})
 	if err != nil {

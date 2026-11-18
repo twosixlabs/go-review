@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/testquality"
@@ -68,6 +69,7 @@ const qualityAgentGroupArgs = `{"snapshotID":"snapshot","behaviorAdequacy":1,"co
 
 func TestQualityAgentLoopRequiresExplicitFinishInSameConversation(t *testing.T) {
 	requests, records := 0, 0
+	intervened := false
 	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
 		requests++
 		switch requests {
@@ -95,6 +97,12 @@ func TestQualityAgentLoopRequiresExplicitFinishInSameConversation(t *testing.T) 
 	})
 	cfg.MaxSteps = 6
 	options := qualityAgentOptions()
+	options.Trace = func(event testquality.ReviewTrace) error {
+		if event.Kind == "feedback" && event.Answer != nil && strings.Contains(event.Answer.Content, "finish_review") {
+			intervened = true
+		}
+		return nil
+	}
 	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
 		return json.RawMessage(`{"source":"inspected"}`), []testquality.Citation{{SnapshotID: "snapshot", FileID: "file", StartLine: 3, EndLine: 8}}, nil
 	}
@@ -111,8 +119,216 @@ func TestQualityAgentLoopRequiresExplicitFinishInSameConversation(t *testing.T) 
 		records++
 		return nil
 	})
-	if err != nil || requests != 5 || records != 2 {
-		t.Fatalf("primary completion: requests=%d records=%d error=%v", requests, records, err)
+	if err != nil || requests != 5 || records != 2 || !intervened {
+		t.Fatalf("primary completion: requests=%d records=%d intervention=%v error=%v", requests, records, intervened, err)
+	}
+}
+
+func TestQualityAgentLoopRecoversEmptyResponseOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		wantRequests int
+		wantFeedback int
+		wantError    string
+	}{
+		{"recover", 3, 1, ""},
+		{"repeated", 3, 1, "no text or tool calls"},
+		{"after-progress", 4, 1, "no text or tool calls"},
+		{"transport", 2, 0, "503"},
+		{"whitespace", 3, 1, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests, records, interventions := 0, 0, 0
+			cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+				requests++
+				switch {
+				case requests == 1:
+					qualityAgentAnswer(w, qualityAgentCall("record", "record_test", qualityAgentTestArgs))
+				case requests == 2 && tc.name == "transport":
+					http.Error(w, "service unavailable", 503)
+				case requests == 3 && tc.name == "after-progress":
+					qualityAgentAnswer(w, qualityAgentCall("read", "review_source", `{}`))
+				case requests == 2 || tc.name == "repeated" || tc.name == "after-progress":
+					content := ""
+					if tc.name == "whitespace" {
+						content = " \n "
+					}
+					raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}, "finish_reason": "stop"}}})
+					fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", raw)
+				default:
+					last := request.Messages[len(request.Messages)-1]
+					if last.Role != "user" || !strings.Contains(last.Content, "empty") || records != 1 {
+						t.Errorf("empty response did not receive recovery feedback with saved work preserved: %+v", last)
+					}
+					qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+				}
+			})
+			cfg.MaxSteps = 5
+			options := qualityAgentOptions()
+			options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+				return json.RawMessage(`{"source":"inspected"}`), nil, nil
+			}
+			options.Finish = func() error { return nil }
+			options.Trace = func(event testquality.ReviewTrace) error {
+				if event.Kind == "feedback" {
+					interventions++
+				}
+				return nil
+			}
+			err := runQualityAgent(t.Context(), cfg, "Review.", options, func(string, json.RawMessage, []testquality.Citation) error {
+				records++
+				return nil
+			})
+			if requests != tc.wantRequests || records != 1 || interventions != tc.wantFeedback || (err != nil) != (tc.wantError != "") {
+				t.Fatalf("bounded recovery: requests=%d records=%d interventions=%d error=%v", requests, records, interventions, err)
+			}
+			if tc.wantError != "" && !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("repeated empty response lost its actual error: %v", err)
+			}
+		})
+	}
+}
+
+func TestQualityAgentLoopInterruptsStreamingRepetitionAndRecoversOnce(t *testing.T) {
+	const paragraph = "I now understand the scope: there are selected tests still unreviewed. This is a large task requiring parallel work. Let me delegate focused investigations while I review tests directly in smaller packages."
+	const next = "Let me start by reviewing some unreviewed packages myself and delegate large packages to children with specific test sets."
+	for _, repeated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("second-loop=%t", repeated), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			s := qualityFixture(t)
+			a, err := s.qualityStore.Create(ctx, s.review, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := a.Items[0]
+			var requests atomic.Int32
+			stopped := make(chan struct{}, 2)
+			cfg := qualityAgentProvider(t, func(w http.ResponseWriter, r *http.Request, request qualityAgentRequest) {
+				n := requests.Add(1)
+				switch {
+				case n == 1:
+					qualityFixtureRespond(w, qualityFixtureRead(item.Declaration), qualityFixtureTest(item, 3, 2, "Saved before the interrupted generation."))
+				case n == 2 || n == 3 && repeated:
+					defer func() { stopped <- struct{}{} }()
+					text := []rune(strings.Repeat(paragraph+"\n\n"+next+"\n\n", 5))
+					for i := 0; i < len(text); i += 7 {
+						raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+							"delta": map[string]string{"content": string(text[i:min(i+7, len(text))])},
+						}}})
+						if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
+							return
+						}
+						w.(http.Flusher).Flush()
+					}
+					// Never finish this response: the client must interrupt it.
+					<-r.Context().Done()
+				case n == 3:
+					last := request.Messages[len(request.Messages)-1]
+					if last.Role != "user" || !strings.Contains(last.Content, "repeating") {
+						t.Errorf("missing corrective feedback: %+v", last)
+					}
+					for _, message := range request.Messages {
+						if message.Role == "assistant" && strings.Contains(message.Content, paragraph) {
+							t.Error("repeating response was fed back into the conversation")
+						}
+					}
+					qualityFixtureRespond(w, qualityFixtureTest(item, 2, 2, "Saved after recovery without rereading source."))
+				default:
+					qualityAgentAnswer(w)
+				}
+			})
+			cfg.MaxSteps = 6
+			options, closeSession, err := s.qualityEvidence(ctx, a, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeSession()
+			feedback, records := 0, 0
+			options.Trace = func(event testquality.ReviewTrace) error {
+				if event.Kind == "feedback" {
+					feedback++
+				}
+				return nil
+			}
+			err = runQualityAgent(ctx, cfg, "Review the selected test.", options, func(name string, args json.RawMessage, seen []testquality.Citation) error {
+				if err := s.recordQualityAgent(a, qualityAgentGroup{Tests: a.Items}, name, args, seen); err != nil {
+					return err
+				}
+				records++
+				return nil
+			})
+			wantRequests, wantRecords, wantStops := int32(4), 2, 1
+			if repeated {
+				wantRequests, wantRecords, wantStops = 3, 1, 2
+				var stalled *qualityAgentScopeError
+				if !errors.As(err, &stalled) || !strings.Contains(err.Error(), "repeating") {
+					t.Errorf("second generation loop did not stop explicitly: %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("productive recovery failed: %v", err)
+			}
+			if ctx.Err() != nil || requests.Load() != wantRequests || records != wantRecords || feedback != 1 {
+				t.Fatalf("streaming recovery was not bounded: requests=%d records=%d feedback=%d owner=%v error=%v", requests.Load(), records, feedback, ctx.Err(), err)
+			}
+			for i := 0; i < wantStops; i++ {
+				select {
+				case <-stopped:
+				case <-ctx.Done():
+					t.Fatal("interrupted provider request was not cancelled")
+				}
+			}
+			saved, err := s.qualityStore.Load(a.ID)
+			if err != nil || saved.Items[0].Status != testquality.StatusScored {
+				t.Fatalf("interrupted generation lost saved work: %+v %v", saved, err)
+			}
+			want := "Saved after recovery"
+			if repeated {
+				want = "Saved before"
+			}
+			if !strings.HasPrefix(saved.Items[0].Ratings[0].Rationale, want) {
+				t.Fatalf("saved judgment did not reflect completed work: %+v", saved.Items[0])
+			}
+		})
+	}
+}
+
+func TestQualityAgentLoopAllowsLongDistinctTextAndRepeatedToolArguments(t *testing.T) {
+	var content strings.Builder
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&content, "Test %d has a distinct contract.\n\n%s\n\n", i,
+			strings.Repeat("Shared explanatory prose about the review. ", 6))
+	}
+	rationale := strings.Repeat("Repeated content is valid inside a tool argument.\n\n", 100)
+	args, _ := json.Marshal(map[string]string{"rationale": rationale})
+	requests, records := 0, 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, _ qualityAgentRequest) {
+		requests++
+		if requests == 1 {
+			frame, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+				"delta": map[string]any{"content": content.String(), "tool_calls": []any{map[string]any{
+					"index": 0, "id": "record", "function": map[string]string{"name": "record_test", "arguments": string(args)},
+				}}},
+				"finish_reason": "tool_calls",
+			}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", frame)
+		} else {
+			qualityAgentAnswer(w)
+		}
+	})
+	err := runQualityAgent(t.Context(), cfg, "Review.", qualityAgentOptions(), func(_ string, raw json.RawMessage, _ []testquality.Citation) error {
+		var record struct{ Rationale string }
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return err
+		}
+		if record.Rationale != rationale {
+			t.Error("stream protection changed valid tool arguments")
+		}
+		records++
+		return nil
+	})
+	if err != nil || requests != 2 || records != 1 {
+		t.Fatalf("productive output was rejected: requests=%d records=%d error=%v", requests, records, err)
 	}
 }
 
@@ -131,6 +347,7 @@ func TestQualityAgentLoopPrimaryCanRecoverFromReadStall(t *testing.T) {
 		}
 	})
 	options := qualityAgentOptions()
+	options.Tools = append(options.Tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "delegate_review", Parameters: json.RawMessage(`{"type":"object"}`)}})
 	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
 		return json.RawMessage(`{}`), nil, errors.New("Unknown document")
 	}
@@ -149,7 +366,7 @@ func TestQualityAgentLoopDetectsUnchangedReadStalls(t *testing.T) {
 				requests++
 				if mode == "recover" && requests == 3 {
 					last := request.Messages[len(request.Messages)-1]
-					if last.Role != "system" || !strings.Contains(last.Content, "unchanged") {
+					if last.Role != "user" || !strings.Contains(last.Content, "unchanged") {
 						t.Errorf("missing stalled-investigation guidance: %+v", last)
 					}
 					qualityAgentAnswer(w, qualityAgentCall("record", "record_test", qualityAgentTestArgs))
@@ -200,8 +417,11 @@ func TestQualityAgentLoopRecordsInterleavedWithInspectedEvidence(t *testing.T) {
 	var requests int
 	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
 		requests++
-		if len(request.ResponseFormat) != 0 || request.MaxTokens != nil || request.ToolChoice != "auto" {
-			t.Errorf("not an unconstrained native tool request: %+v", request)
+		if len(request.ResponseFormat) != 0 || request.MaxTokens == nil || *request.MaxTokens <= 0 || request.ToolChoice != "auto" {
+			t.Errorf("not a budgeted native tool request: %+v", request)
+		}
+		if len(request.Messages) < 2 || request.Messages[0].Role != "system" || request.Messages[1].Role != "user" {
+			t.Errorf("agent has no separate user task: %+v", request.Messages)
 		}
 		if requests == 1 {
 			for _, name := range []string{"record_test", "record_group"} {
@@ -321,6 +541,42 @@ func TestQualityAgentLoopRecordsInterleavedWithInspectedEvidence(t *testing.T) {
 	})
 	if err != nil || requests != 2 || len(recorded) != 3 {
 		t.Fatalf("run: requests=%d records=%v error=%v", requests, recorded, err)
+	}
+}
+
+func TestQualityAgentLoopFeedbackDoesNotInterruptToolResults(t *testing.T) {
+	requests := 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		requests++
+		switch requests {
+		case 1:
+			qualityAgentAnswer(w, qualityAgentCall("first", "review_source", `{"fileID":"A"}`))
+		case 2:
+			qualityAgentAnswer(w, qualityAgentCall("repeated", "review_source", `{"fileID":"A"}`),
+				qualityAgentCall("independent", "review_source", `{"fileID":"B"}`))
+		default:
+			for i, message := range request.Messages {
+				for j, call := range message.ToolCalls {
+					index := i + j + 1
+					if index >= len(request.Messages) || request.Messages[index].Role != "tool" ||
+						request.Messages[index].ToolCallID != call.ID {
+						t.Errorf("feedback interrupted the native tool-result sequence for %s", call.ID)
+					}
+				}
+			}
+			last := request.Messages[len(request.Messages)-1]
+			if last.Role != "user" || !strings.Contains(last.Content, "unchanged") {
+				t.Error("stall feedback was lost rather than deferred")
+			}
+			qualityAgentAnswer(w)
+		}
+	})
+	options := qualityAgentOptions()
+	options.Read = func(_ context.Context, _ string, args json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		return args, nil, nil
+	}
+	if err := runQualityAgent(t.Context(), cfg, "Review.", options, nil); err != nil || requests != 3 {
+		t.Fatalf("multi-tool continuation failed: requests=%d error=%v", requests, err)
 	}
 }
 
@@ -488,7 +744,7 @@ func TestQualityAgentLoopTracesReadableProgress(t *testing.T) {
 	err := runQualityAgent(t.Context(), cfg, "Review pinned tests.", testquality.JudgmentOptions{
 		Trace: func(event testquality.ReviewTrace) error {
 			kinds = append(kinds, event.Kind)
-			if event.Kind == "request" && (len(event.Messages) == 0 || event.Messages[0].Content != "Review pinned tests." || len(event.Tools) < 2) {
+			if event.Kind == "request" && (len(event.Messages) == 0 || event.Messages[0].Content != "Review pinned tests.") {
 				t.Errorf("request trace lacks model context: %+v", event)
 			}
 			if event.Kind == "message" {
@@ -569,7 +825,7 @@ func TestQualityAgentLoopCompactsSavedRecordsAndRequiresEvidenceReread(t *testin
 				content.WriteString(message.Content)
 			}
 			text := content.String()
-			for _, want := range []string{"compacted", "saved", "record_test", "record_group", "Checks the return value.", "Independent collective judgment.", "chosen-child", "Investigate the related helper."} {
+			for _, want := range []string{"compacted", "saved", "record_test", "record_group", "Checks the return value.", "Independent collective judgment.", "chosen-child", "Investigate the related helper.", `"projectRecorded":false`} {
 				if !strings.Contains(text, want) {
 					t.Errorf("compaction omitted %q", want)
 				}
@@ -590,6 +846,7 @@ func TestQualityAgentLoopCompactsSavedRecordsAndRequiresEvidenceReread(t *testin
 	})
 	cfg.ContextBytes = 32768
 	options := qualityAgentOptions()
+	options.State = func() (json.RawMessage, error) { return json.RawMessage(`{"projectRecorded":false}`), nil }
 	options.Tools = append(options.Tools, intelligence.Tool{Type: "function", Function: intelligence.Function{Name: "delegate_review", Parameters: json.RawMessage(`{"type":"object"}`)}})
 	options.Read = func(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
 		if name == "delegate_review" {
@@ -619,7 +876,88 @@ func TestQualityAgentLoopCompactsSavedRecordsAndRequiresEvidenceReread(t *testin
 	}
 }
 
-func TestQualityAgentLoopRejectsLedgerThatCannotFitContext(t *testing.T) {
+func TestQualityAgentLoopCompactionRetainsRecentSourceAndToolPairs(t *testing.T) {
+	old := testquality.Citation{SnapshotID: "snapshot", FileID: "old", StartLine: 1, EndLine: 2}
+	recent := testquality.Citation{SnapshotID: "snapshot", FileID: "recent", StartLine: 3, EndLine: 8}
+	requests, records := 0, 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		requests++
+		switch requests {
+		case 1:
+			qualityAgentAnswer(w, qualityAgentCall("old", "review_source", `{"fileID":"old"}`))
+		case 2:
+			qualityAgentAnswer(w, qualityAgentCall("recent", "review_source", `{"fileID":"recent"}`),
+				qualityAgentCall("saved", "record_test", qualityAgentTestArgs))
+		case 3:
+			retained := false
+			for i, message := range request.Messages {
+				if strings.Contains(message.Content, "OLD-CHECK") {
+					t.Error("compaction retained the oversized old turn")
+				}
+				if message.Role == "tool" && message.ToolCallID == "recent" && strings.Contains(message.Content, "RECENT-CHECK") {
+					retained = true
+					if i == 0 || len(request.Messages[i-1].ToolCalls) == 0 {
+						t.Error("compaction separated a tool result from its assistant call")
+					}
+				}
+			}
+			if !retained {
+				t.Error("compaction discarded recently inspected source")
+			}
+			qualityAgentAnswer(w, qualityAgentCall("collective", "record_group", qualityAgentGroupArgs))
+		default:
+			qualityAgentAnswer(w)
+		}
+	})
+	cfg.ContextBytes = 32768
+	options := qualityAgentOptions()
+	options.Read = func(_ context.Context, _ string, args json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		text, citation := "RECENT-CHECK"+strings.Repeat("r", 6000), recent
+		if strings.Contains(string(args), `"old"`) {
+			text, citation = "OLD-CHECK"+strings.Repeat("o", 18000), old
+		}
+		raw, _ := json.Marshal(text)
+		return raw, []testquality.Citation{citation}, nil
+	}
+	err := runQualityAgent(t.Context(), cfg, "Review pinned source.", options, func(_ string, _ json.RawMessage, seen []testquality.Citation) error {
+		records++
+		if records == 2 && (len(seen) != 1 || seen[0] != recent) {
+			t.Errorf("citation authority did not track retained source: %+v", seen)
+		}
+		return nil
+	})
+	if err != nil || requests != 4 || records != 2 {
+		t.Fatalf("recent context continuation: requests=%d records=%d error=%v", requests, records, err)
+	}
+}
+
+func TestQualityAgentLoopCompactsBeforeConfiguredModelWindowIsExhausted(t *testing.T) {
+	requests, records := 0, 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, _ qualityAgentRequest) {
+		requests++
+		if requests == 1 {
+			qualityAgentAnswer(w, qualityAgentCall("read", "review_source", `{}`),
+				qualityAgentCall("record", "record_test", qualityAgentTestArgs))
+		} else {
+			qualityAgentAnswer(w)
+		}
+	})
+	cfg.ContextTokens = 16384
+	options := qualityAgentOptions()
+	options.Read = func(context.Context, string, json.RawMessage) (json.RawMessage, []testquality.Citation, error) {
+		raw, _ := json.Marshal(strings.Repeat("x", 13000))
+		return raw, nil, nil
+	}
+	err := runQualityAgent(t.Context(), cfg, "Review.", options, func(string, json.RawMessage, []testquality.Citation) error {
+		records++
+		return nil
+	})
+	if err != nil || requests != 2 || records != 1 {
+		t.Fatalf("model window was not respected during compaction: requests=%d records=%d error=%v", requests, records, err)
+	}
+}
+
+func TestQualityAgentLoopCompactsOversizedSavedRecordsWithoutLosingPersistence(t *testing.T) {
 	var requests, records int
 	args, err := json.Marshal(map[string]any{
 		"snapshotID": "snapshot", "symbolID": "test", "craftsmanship": 3, "assertionStrength": 2,
@@ -628,16 +966,27 @@ func TestQualityAgentLoopRejectsLedgerThatCannotFitContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, _ qualityAgentRequest) {
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
 		requests++
-		qualityAgentAnswer(w, qualityAgentCall("record", "record_test", string(args)))
+		if requests == 1 {
+			qualityAgentAnswer(w, qualityAgentCall("record", "record_test", string(args)))
+			return
+		}
+		if !strings.Contains(request.Messages[3].Content, `"savedRecordCount":1`) {
+			t.Error("compaction lost the saved checkpoint")
+		}
+		qualityAgentAnswer(w)
 	})
 	cfg.ContextBytes = 32768
-	err = runQualityAgent(t.Context(), cfg, "Review.", testquality.JudgmentOptions{}, func(string, json.RawMessage, []testquality.Citation) error {
+	cfg.MaxSteps = 3
+	err = runQualityAgent(t.Context(), cfg, "Review.", testquality.JudgmentOptions{}, func(_ string, raw json.RawMessage, _ []testquality.Citation) error {
 		records++
+		if string(raw) != string(args) {
+			t.Error("the persisted record was truncated")
+		}
 		return nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "context") || requests != 1 || records != 1 {
+	if err != nil || requests != 2 || records != 1 {
 		t.Fatalf("oversized saved ledger was truncated or lost: requests=%d records=%d error=%v", requests, records, err)
 	}
 }

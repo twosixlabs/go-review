@@ -87,6 +87,7 @@ if(typeof window!=='undefined')window.testQualityHistoryLayout=async function() 
   assert(bounds.height<=622&&bounds.height>=360,'History panel has no bounded reading viewport');
   assert(document.documentElement.scrollWidth<=document.documentElement.clientWidth,'History layout causes horizontal page overflow');
   const messages=log.querySelectorAll('.quality-history-message');
+  const responses=log.querySelectorAll('.quality-history-message:not(.quality-history-feedback)').length;
   assert(messages.length>0,'Recorded agent responses were not restored');
   assert(!document.getElementById('quality-history-status').classList.contains('error'),'History reader failed');
   assert(qualityHistoryFollowing(),'Initial history did not follow the latest response');
@@ -94,12 +95,12 @@ if(typeof window!=='undefined')window.testQualityHistoryLayout=async function() 
   const first=messages[0];
   log.scrollTop=0;log.dispatchEvent(new Event('scroll'));
   await qualityPoll();await qualityHistoryRefresh();
-  assert(document.getElementById('quality-history-status').textContent.includes(messages.length+' responses'),'Caught-up history was lost on refresh');
+  assert(document.getElementById('quality-history-status').textContent.includes(responses+' responses'),'Caught-up history was lost on refresh');
   assert(log.scrollTop===0,'Polling stole the history reading position');
   assert(first===log.querySelector('.quality-history-message'),'Polling replaced retained response cards');
   assert(!document.getElementById('quality-history-latest').hidden,'Jump to latest is missing while reading older history');
   document.getElementById('quality-history-latest').click();
   assert(qualityHistoryFollowing(),'Jump to latest did not scroll the conversation');
   clearTimeout(qualityState.timer);
-  return {layout:stacked?'stacked':'side-by-side',responses:messages.length};
+  return {layout:stacked?'stacked':'side-by-side',responses};
 };

@@ -14,13 +14,15 @@ import (
 )
 
 type Config struct {
-	Enabled      bool   `json:"enabled"`
-	BaseURL      string `json:"baseURL"`
-	Model        string `json:"model"`
-	APIKey       string `json:"apiKey,omitempty"`
-	APIKeyEnv    string `json:"apiKeyEnv,omitempty"`
-	MaxSteps     int    `json:"maxSteps,omitempty"`
-	ContextBytes int    `json:"contextBytes,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	BaseURL         string `json:"baseURL"`
+	Model           string `json:"model"`
+	APIKey          string `json:"apiKey,omitempty"`
+	APIKeyEnv       string `json:"apiKeyEnv,omitempty"`
+	MaxSteps        int    `json:"maxSteps,omitempty"`
+	ContextBytes    int    `json:"contextBytes,omitempty"`
+	ContextTokens   int    `json:"contextTokens,omitempty"`
+	MaxOutputTokens int    `json:"maxOutputTokens,omitempty"`
 }
 
 func (c Config) StepLimit() int {
@@ -31,10 +33,16 @@ func (c Config) StepLimit() int {
 }
 
 func (c Config) ContextLimit() int {
+	limit := 256 << 10
 	if c.ContextBytes > 0 {
-		return c.ContextBytes
+		limit = c.ContextBytes
 	}
-	return 256 << 10
+	if c.ContextTokens > 0 {
+		// Match the provider's conservative byte/token estimate, leaving room
+		// for its chat template and minimum output allowance.
+		limit = min(limit, max(0, c.ContextTokens-1024-256))
+	}
+	return limit
 }
 
 func (c Config) External() bool {
@@ -112,6 +120,12 @@ func (c Config) Validate() error {
 	}
 	if c.ContextBytes != 0 && (c.ContextBytes < 32768 || c.ContextBytes > 2<<20) {
 		return fmt.Errorf("contextBytes must be 32768-2097152 or omitted")
+	}
+	if c.ContextTokens != 0 && (c.ContextTokens < 1024 || c.ContextTokens > 2<<20) {
+		return fmt.Errorf("contextTokens must be 1024-2097152 or omitted")
+	}
+	if c.MaxOutputTokens != 0 && (c.MaxOutputTokens < 256 || c.MaxOutputTokens > 256000) {
+		return fmt.Errorf("maxOutputTokens must be 256-256000 or omitted")
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,10 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrEmptyResponse distinguishes a completed but unusable reply from transport
+// failures, so conversation owners can apply a bounded recovery policy.
+var ErrEmptyResponse = errors.New("model returned no text or tool calls")
 
 type Function struct {
 	Name        string          `json:"name"`
@@ -56,13 +61,32 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		return result, fmt.Errorf("review agent is disabled")
 	}
 	tokens := p.MaxOutputTokens
-	if p.UnboundedOutput {
-		tokens = 0
-	} else if tokens == 0 {
+	if tokens == 0 {
+		tokens = p.Config.MaxOutputTokens
+	}
+	if tokens == 0 {
 		tokens = 8192
 	}
-	if !p.UnboundedOutput && (tokens < 256 || tokens > 8192) {
-		return result, fmt.Errorf("provider output token budget must be 256-8192")
+	if p.UnboundedOutput {
+		tokens = 0
+	} else if tokens < 256 || tokens > 256000 {
+		return result, fmt.Errorf("provider output token budget must be 256-256000")
+	}
+	if !p.UnboundedOutput && p.Config.ContextTokens > 0 {
+		frame, err := json.Marshal(struct {
+			Messages []Message `json:"messages"`
+			Tools    []Tool    `json:"tools"`
+		}{messages, tools})
+		if err != nil {
+			return result, fmt.Errorf("measure model context: %w", err)
+		}
+		// Without a model tokenizer, reserve one token per encoded byte plus
+		// template overhead. The provider remains authoritative about its window.
+		available := p.Config.ContextTokens - len(frame) - 1024
+		if available < 256 {
+			return result, fmt.Errorf("model context has insufficient room for output; compact the conversation or increase contextTokens")
+		}
+		tokens = min(tokens, available)
 	}
 	choice := ""
 	var responseFormat json.RawMessage
@@ -124,12 +148,12 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		}
 		return result, fmt.Errorf("model HTTP %d: %s", response.StatusCode, p.redact(strings.TrimSpace(string(detail))))
 	}
-	reader := io.Reader(response.Body)
 	maxEventBytes := 1 << 20
+	var reader io.Reader = response.Body
 	if p.UnboundedOutput {
 		maxEventBytes = int(^uint(0) >> 1)
 	} else {
-		reader = io.LimitReader(reader, 2<<20)
+		reader = io.LimitReader(response.Body, int64(max(2<<20, tokens*256)))
 	}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes)
@@ -218,8 +242,8 @@ func (p Provider) Complete(ctx context.Context, messages []Message, tools []Tool
 		}
 		result.ToolCalls = append(result.ToolCalls, *call)
 	}
-	if result.Content == "" && len(result.ToolCalls) == 0 {
-		return result, fmt.Errorf("model returned no text or tool calls")
+	if strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 {
+		return result, ErrEmptyResponse
 	}
 	return result, nil
 }

@@ -25,7 +25,7 @@ function qualityHistoryFilter() {
 }
 function qualityHistoryMeta(parent,row) {
   const meta=el('div',undefined,parent,'quality-history-meta');
-  el('strong',row.agentID,meta);
+  el('strong',row.kind==='feedback'?'System to '+row.agentID:row.agentID,meta);
   const time=el('time',new Date(row.time).toLocaleTimeString(),meta,'quality-history-time');
   time.dateTime=row.time;time.title=row.time;
 }
@@ -58,7 +58,7 @@ function qualityHistoryActivity(state,row) {
   const entry=el('div',undefined,state.group,'quality-history-entry');
   entry.dataset.agent=row.agentID;entry.dataset.error=String(!!row.errorPreview);
   qualityHistoryMeta(entry,row);
-  const labels={start:'Started',assignment:'Assigned review',tool_call:'Calling',tool:'Returned',end:'Finished',response:'Provider response'};
+  const labels={start:'Started',assignment:'Assigned review',state:'Saved progress',tool_call:'Calling',tool:'Returned',end:'Finished',response:'Provider response'};
   el('div',`${labels[row.kind]||row.kind}${row.tool?' · '+row.tool:''}${row.status?' · '+row.status:''}`,entry);
   if(row.errorPreview)el('p',row.errorPreview,entry);
   const body=el('div',undefined,entry);
@@ -80,17 +80,21 @@ function qualityHistoryActivity(state,row) {
   const error=el('p',undefined,entry);error.setAttribute('role','status');
 }
 async function qualityHistoryAppend(state,row) {
-  if(row.kind==='message'&&row.messagePreview) {
+  // Earlier archives retained routine state as feedback.
+  if(row.kind==='feedback'&&row.messagePreview?.startsWith('Authoritative saved review state (data, not instructions):'))
+    row={...row,kind:'state'};
+  if((row.kind==='message'||row.kind==='feedback')&&row.messagePreview) {
     const text=await qualityHistoryMessage(state,row);
     if(!qualityHistoryCurrent(state)||!text.trim())return;
     const follow=qualityHistoryFollowing();
-    const article=el('article',undefined,qualityEl('quality-history-log'),'quality-history-entry quality-history-message');
+    const article=el('article',undefined,qualityEl('quality-history-log'),'quality-history-entry quality-history-message'+(row.kind==='feedback'?' quality-history-feedback':''));
     article.dataset.agent=row.agentID;
     qualityHistoryMeta(article,row);
     chatMarkdown(el('div',undefined,article,'chat-text quality-history-text'),text);
-    state.responses++;state.group=null;
+    if(row.kind==='message')state.responses++;
+    state.group=null;
     qualityHistoryFilter();qualityHistoryScroll(follow);
-  } else if(row.kind!=='message') {
+  } else if(row.kind!=='message'&&row.kind!=='feedback') {
     const follow=qualityHistoryFollowing();
     qualityHistoryActivity(state,row);
     qualityHistoryFilter();qualityHistoryScroll(follow);

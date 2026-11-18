@@ -277,6 +277,7 @@ async function qualityResponsibility(identity) {
   qualityState.selected=input;qualityState.source=null;qualityEl('quality-source').replaceChildren();
   const parent=qualityEl('quality-detail');parent.replaceChildren();
   el('h3',data.name,parent);el('p',data.status+(data.reason?' · '+data.reason:''),parent);
+  if(data.reusedFrom)el('p',`Reused from assessment ${data.reusedFrom.assessmentID} · ${data.reusedFrom.model} · retained project inputs unchanged.`,parent,'muted');
   if(data.declaration?.fileID)qualityCitations(parent,[data.declaration]);
   for(const r of data.ratings||[]) {
     el('h4',`${r.dimension.replaceAll('-',' ')} · ${r.state==='assessed'?r.value+' / 4':r.state}`,parent);

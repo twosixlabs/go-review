@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/russellbrasser/go-review/internal/intelligence"
 	"github.com/russellbrasser/go-review/internal/review"
 	"github.com/russellbrasser/go-review/internal/testquality"
 )
@@ -118,6 +119,106 @@ func TestQualityMCPDiscoversSelectedTestsByPackage(t *testing.T) {
 	raw, _, err = options.Read(t.Context(), "review_tests", args)
 	if err != nil || !strings.Contains(string(raw), `"total":0`) {
 		t.Fatalf("package filter escaped selection: %s %v", raw, err)
+	}
+}
+
+func TestQualityMCPPagedInspectionRequiresAllRetainedSnapshotFragments(t *testing.T) {
+	text := "package example\n// \u03c0\tcontract\n"
+	report := &review.Report{Module: "example",
+		Files:     []review.File{{ID: "source", Path: "sample.go", Source: text, SHA256: testquality.Digest([]byte(text))}},
+		Documents: []review.Document{{ID: "source", Path: "contract.md", Text: text}},
+	}
+	a := &testquality.Assessment{Reports: []testquality.PinnedReport{
+		{SnapshotID: "owned", Report: report}, {SnapshotID: "other", Report: report},
+	}}
+	s := New(&review.Report{Module: "unrelated"})
+	options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	for _, tool := range []string{"review_source", "review_read_file", "review_document"} {
+		t.Run(tool, func(t *testing.T) {
+			var messages, mixed []intelligence.Message
+			offset := 0
+			for index := 0; ; index++ {
+				args := map[string]any{"snapshotID": "owned", "textOffset": offset, "textLimit": 7}
+				switch tool {
+				case "review_source":
+					args["fileID"] = "source"
+				case "review_read_file":
+					args["path"] = "sample.go"
+				case "review_document":
+					args["id"] = "source"
+				}
+				raw, _ := json.Marshal(args)
+				result, _, err := options.Read(t.Context(), tool, raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				call := qualityAgentCall(fmt.Sprint(index), tool, string(raw))
+				pair := []intelligence.Message{
+					{Role: "assistant", ToolCalls: []intelligence.ToolCall{call}},
+					{Role: "tool", ToolCallID: call.ID, Content: string(result)},
+				}
+				messages = append(messages, pair...)
+				if index == 1 {
+					args["snapshotID"] = "other"
+					raw, _ = json.Marshal(args)
+					other, _, err := options.Read(t.Context(), tool, raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					pair = []intelligence.Message{
+						{Role: "assistant", ToolCalls: []intelligence.ToolCall{qualityAgentCall(call.ID, tool, string(raw))}},
+						{Role: "tool", ToolCallID: call.ID, Content: string(other)},
+					}
+				}
+				mixed = append(mixed, pair...)
+				var page struct {
+					Data struct {
+						TextPage struct{ NextOffset *int }
+					}
+				}
+				if err := json.Unmarshal(result, &page); err != nil {
+					t.Fatal(err)
+				}
+				if page.Data.TextPage.NextOffset == nil {
+					break
+				}
+				offset = *page.Data.TextPage.NextOffset
+			}
+			complete := append(append([]intelligence.Message(nil), messages...), messages[:2]...)
+			want := testquality.Citation{SnapshotID: "owned", FileID: "source", StartLine: 1, EndLine: 3}
+			seen := qualityAgentPagedCitations(complete)
+			if len(seen) != 1 || seen[0] != want {
+				t.Fatalf("complete overlapping Unicode pages lost their exact lines: %+v", seen)
+			}
+			for name, retained := range map[string][]intelligence.Message{
+				"compacted": messages[2:], "mixed snapshots": mixed,
+			} {
+				if seen := qualityAgentPagedCitations(retained); len(seen) != 0 {
+					t.Fatalf("%s source fragments granted complete authority: %+v", name, seen)
+				}
+			}
+		})
+	}
+}
+
+func TestQualityMCPInspectsEntryPointDocuments(t *testing.T) {
+	report := &review.Report{Module: "example", EntryPoints: &review.EntryPointInventory{Sources: []review.Document{
+		{ID: "entry-contract", Path: "api.wit", Text: "package example:api;\nworld handler {}\n"},
+	}}}
+	a := &testquality.Assessment{Reports: []testquality.PinnedReport{{SnapshotID: "owned", Report: report}}}
+	s := New(&review.Report{Module: "unrelated"})
+	options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession()
+	raw, seen, err := options.Read(t.Context(), "review_document", json.RawMessage(`{"snapshotID":"owned","id":"entry-contract"}`))
+	if err != nil || len(seen) != 1 || seen[0].FileID != "entry-contract" || !strings.Contains(string(raw), "world handler") {
+		t.Fatalf("retained entry-point contract could not be inspected: %s %+v %v", raw, seen, err)
 	}
 }
 

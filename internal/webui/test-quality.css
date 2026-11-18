@@ -19,6 +19,7 @@ body.test-quality-open.chat-open #test-quality-workspace { margin-right: clamp(3
 #quality-history-log { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; padding: 0 12px; }
 .quality-history-message { margin: 0 0 10px; padding: 10px; border: 1px solid #58758b; border-radius: 5px; background: rgba(146,200,255,.07); overflow-wrap: anywhere; }
 .quality-history-message[data-agent="Lead"] { border-left: 3px solid #92c8ff; }
+.quality-history-message.quality-history-feedback { border-left: 3px solid #e8c879; background: rgba(232,200,121,.07); }
 .quality-history-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: .75rem; }
 .quality-history-time { margin-left: auto; opacity: .8; }
 .quality-history-text { font-size: .85rem; }

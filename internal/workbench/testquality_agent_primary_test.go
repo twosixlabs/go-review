@@ -3,6 +3,7 @@ package workbench
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,7 +17,98 @@ import (
 	"github.com/russellbrasser/go-review/internal/testquality"
 )
 
-func TestQualityAgentDelegatedDiscoveryPreservesRecordingMode(t *testing.T) {
+func qualityChildReport(t *testing.T, p *qualityPrimary) (json.RawMessage, []testquality.Citation, error) {
+	t.Helper()
+	p.mu.Lock()
+	done := p.children["agent-1"].done
+	p.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("child did not finish")
+	}
+	return p.call(t.Context(), "read_review_agent", json.RawMessage(`{"agentID":"agent-1"}`))
+}
+
+func TestQualityAgentChildReadDoesNotBlockIndependentWork(t *testing.T) {
+	started := make(chan struct{})
+	cfg := qualityAgentProvider(t, func(_ http.ResponseWriter, r *http.Request, _ qualityAgentRequest) {
+		close(started)
+		<-r.Context().Done()
+	})
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := newQualityPrimary(t.Context(), s, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	if _, err := p.delegate(json.RawMessage(`{"mode":"research","instructions":"Inspect the helper."}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	raw, _, err := p.call(ctx, "read_review_agent", json.RawMessage(`{"agentID":"agent-1","wait":true}`))
+	if err != nil || !strings.Contains(string(raw), `"status":"running"`) {
+		t.Fatalf("reading a running child blocked the lead: %s %v", raw, err)
+	}
+}
+
+func TestQualityAgentLeadResumesOnChildNotificationWithoutPolling(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	requests := 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		if strings.HasPrefix(request.Messages[0].Content, qualityAgentPrompt) {
+			<-release
+			http.Error(w, "helper investigation unavailable", 503)
+			return
+		}
+		requests++
+		switch requests {
+		case 1:
+			qualityAgentAnswer(w, qualityAgentCall("delegate", "delegate_review", `{"mode":"research","instructions":"Inspect the helper."}`))
+		case 2:
+			qualityAgentAnswer(w)
+			close(release)
+		case 3:
+			found := false
+			for _, message := range request.Messages {
+				if strings.Contains(message.Content, `"agentNotifications"`) && strings.Contains(message.Content, "503") &&
+					strings.Contains(message.Content, `"recorded":0`) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("idle lead resumed without the child's authoritative completion report: %+v", request.Messages)
+			}
+			group := qualityFixtureGroup(a.Items[0].Declaration, "Project judgment.")
+			group.args.(map[string]any)["scope"] = "project"
+			qualityFixtureRespond(w, qualityFixtureRead(a.Items[0].Declaration),
+				qualityFixtureTest(a.Items[0], 3, 2, "Checks the result."), group)
+		default:
+			qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+		}
+	})
+	cfg.MaxSteps = 5
+	p, err := newQualityPrimary(t.Context(), s, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.run(); err != nil || requests != 4 {
+		t.Fatalf("notification-driven recovery failed: requests=%d error=%v", requests, err)
+	}
+}
+
+func TestQualityAgentDelegatedDiscoveryAllowsInspectedRecording(t *testing.T) {
 	for _, mode := range []string{"research", "assigned-tests"} {
 		t.Run(mode, func(t *testing.T) {
 			s := qualityFixture(t)
@@ -38,30 +130,55 @@ func TestQualityAgentDelegatedDiscoveryPreservesRecordingMode(t *testing.T) {
 				last := request.Messages[len(request.Messages)-1].Content
 				switch requests {
 				case 1:
-					if !strings.Contains(request.Messages[0].Content, `"mode":"`+mode+`"`) {
-						t.Errorf("child mode is not explicit: %s", request.Messages[0].Content)
+					canRecord := false
+					for _, tool := range request.Tools {
+						if tool.Function.Name == "record_test" {
+							canRecord = true
+						}
+					}
+					if !canRecord {
+						t.Error("child cannot submit an inspected test review")
+					}
+					if !strings.Contains(request.Messages[1].Content, `"mode":"`+mode+`"`) {
+						t.Errorf("child mode is not explicit: %s", request.Messages[1].Content)
+					}
+					qualityFixtureRespond(w, qualityFixtureTest(a.Items[0], 3, 3, "Must not save before reading."))
+				case 2:
+					if !strings.Contains(last, "inspected source") {
+						t.Errorf("unread submission was not rejected for missing inspection: %s", last)
 					}
 					call("review_tests", map[string]any{"package": "example"})
-				case 2:
+				case 3:
 					if !strings.Contains(last, `"symbolID":"TestF"`) {
 						t.Errorf("child could not discover selected test: %s", last)
 					}
 					call("review_list_files", map[string]any{"path": ".", "source": "retained"})
-				case 3:
+				case 4:
 					if !strings.Contains(last, "f_test.go") {
 						t.Errorf("child inventory hid test source: %s", last)
 					}
 					call("review_read_file", map[string]any{"path": "f_test.go", "source": "live", "startLine": 3, "endLine": 3})
-				case 4:
+				case 5:
 					if !strings.Contains(last, `"snapshotMatch":true`) {
 						t.Errorf("live provenance missing: %s", last)
 					}
 					qualityFixtureRespond(w, qualityFixtureTest(a.Items[0], 3, 3, "Checks the returned value."))
 				default:
-					if strings.Contains(last, "recording scope does not contain any assigned tests") != (mode == "research") {
-						t.Errorf("child recording mode not enforced: %s", last)
+					lastTool := ""
+					for i := len(request.Messages) - 1; i >= 0; i-- {
+						if request.Messages[i].Role == "tool" {
+							lastTool = request.Messages[i].Content
+							break
+						}
 					}
-					qualityFixtureRespond(w)
+					if !strings.Contains(lastTool, `"recorded":true`) {
+						t.Errorf("inspected submission was rejected: %s", lastTool)
+					}
+					if mode == "research" {
+						qualityAgentAnswer(w)
+					} else {
+						qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+					}
 				}
 			})
 			p, err := newQualityPrimary(t.Context(), s, a, cfg)
@@ -69,7 +186,7 @@ func TestQualityAgentDelegatedDiscoveryPreservesRecordingMode(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.close()
-			input := map[string]any{"instructions": "Inspect tests in package example; do not broaden the investigation."}
+			input := map[string]any{"mode": mode, "instructions": "Inspect tests in package example; do not broaden the investigation."}
 			if mode == "assigned-tests" {
 				input["tests"] = []testquality.Identity{a.Items[0].Identity}
 			}
@@ -77,13 +194,18 @@ func TestQualityAgentDelegatedDiscoveryPreservesRecordingMode(t *testing.T) {
 			if _, _, err := p.call(t.Context(), "delegate_review", raw); err != nil {
 				t.Fatal(err)
 			}
-			result, _, err := p.call(t.Context(), "read_review_agent", json.RawMessage(`{"agentID":"agent-1","wait":true}`))
+			result, _, err := qualityChildReport(t, p)
 			if err != nil || !strings.Contains(string(result), `"status":"completed"`) {
 				t.Fatalf("focused child failed: %s %v", result, err)
 			}
 			p.close()
-			if (a.Items[0].Status == testquality.StatusScored) != (mode == "assigned-tests") || a.Suite != nil {
-				t.Fatalf("child recording authority changed: %+v", qualityCompact(a))
+			saved, err := s.qualityStore.Load(a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.Items[0].Status != testquality.StatusScored || saved.Suite != nil ||
+				saved.Items[0].Ratings[0].Rationale != "Checks the returned value." {
+				t.Fatalf("inspected child review was not saved: %+v", qualityCompact(saved))
 			}
 		})
 	}
@@ -173,7 +295,7 @@ func TestQualityAgentPrimaryOwnsChildConcurrencyAndCancellation(t *testing.T) {
 				Tests     []testquality.Responsibility `json:"tests"`
 				Snapshots []map[string]string          `json:"snapshots"`
 			}
-			text := request.Messages[0].Content
+			text := request.Messages[1].Content
 			if err := json.Unmarshal([]byte(text[strings.Index(text, "{"):]), &assignment); err != nil || len(assignment.Snapshots) != 1 || len(assignment.Tests) != 0 {
 				t.Errorf("research-only child cannot discover pinned evidence: %+v %v", assignment, err)
 			}
@@ -192,7 +314,7 @@ func TestQualityAgentPrimaryOwnsChildConcurrencyAndCancellation(t *testing.T) {
 	}
 	defer p.close()
 	for i := 0; i < 3; i++ {
-		if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"instructions":"Inspect the test helper; report observations."}`)); err != nil {
+		if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"mode":"research","instructions":"Inspect the test helper; report observations."}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -203,7 +325,7 @@ func TestQualityAgentPrimaryOwnsChildConcurrencyAndCancellation(t *testing.T) {
 			t.Fatal("primary-chosen children did not start")
 		}
 	}
-	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"instructions":"Must wait for capacity."}`)); err == nil {
+	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"mode":"research","instructions":"Must wait for capacity."}`)); err == nil {
 		t.Fatal("allowed more than four total agents")
 	}
 	if err := p.finish(); err == nil || !strings.Contains(err.Error(), "active") {
@@ -212,7 +334,19 @@ func TestQualityAgentPrimaryOwnsChildConcurrencyAndCancellation(t *testing.T) {
 	if _, _, err := p.call(t.Context(), "cancel_review_agent", json.RawMessage(`{"agentID":"agent-1"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"instructions":"Investigate a different hypothesis."}`)); err != nil {
+	notification, err := p.notifications(t.Context(), false)
+	if err != nil || !strings.Contains(string(notification), `"status":"cancelled"`) {
+		t.Fatalf("child cancellation did not notify the lead: %s %v", notification, err)
+	}
+	if repeated, err := p.notifications(t.Context(), false); err != nil || len(repeated) != 0 {
+		t.Fatalf("completion report was delivered repeatedly: %s %v", repeated, err)
+	}
+	waitCtx, stopWaiting := context.WithCancel(t.Context())
+	stopWaiting()
+	if _, err := p.notifications(waitCtx, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("idle lead ignored cancellation: %v", err)
+	}
+	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"mode":"research","instructions":"Investigate a different hypothesis."}`)); err != nil {
 		t.Fatalf("cancelled child retained its execution slot: %v", err)
 	}
 	select {
@@ -262,16 +396,18 @@ func TestQualityAgentPrimaryDelegatesAcrossModulesWithoutSharingCitationAuthorit
 	if len(assigned) != 2 || assigned[0].Identity.Module == assigned[1].Identity.Module || assigned[0].Package == assigned[1].Package {
 		t.Fatal("fixture must span modules and packages")
 	}
+	requests := 0
 	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
-		if len(request.Messages) == 1 {
+		requests++
+		if requests == 1 {
 			var scope struct{ Tests []testquality.Responsibility }
-			text := request.Messages[0].Content
+			text := request.Messages[1].Content
 			if err := json.Unmarshal([]byte(text[strings.Index(text, "{"):]), &scope); err != nil || len(scope.Tests) != 2 {
 				t.Errorf("primary's cross-module assignment was not delivered: %+v %v", scope, err)
 			}
 			qualityFixtureRespond(w,
 				qualityFixtureRead(assigned[0].Declaration), qualityFixtureRead(assigned[1].Declaration), qualityFixtureRead(outside.Declaration),
-				qualityFixtureTest(outside, 2, 1, "Unassigned test must not be recorded."),
+				qualityFixtureTest(outside, 2, 1, "Inspected test outside the delegated list."),
 				qualityFixtureGroup(assigned[0].Declaration, "Child must not own the project."),
 				qualityFixtureTest(assigned[0], 3, 2, "Assigned test inspected."),
 				qualityFixtureTest(assigned[1], 2, 3, "Second module inspected."))
@@ -283,21 +419,25 @@ func TestQualityAgentPrimaryDelegatesAcrossModulesWithoutSharingCitationAuthorit
 				rejections++
 			}
 		}
-		if rejections != 2 {
-			t.Errorf("child scope violations did not return feedback: rejections=%d", rejections)
+		if rejections != 1 {
+			t.Errorf("only project synthesis should be rejected, not an inspected test: rejections=%d", rejections)
 		}
-		qualityAgentAnswer(w)
+		if requests == 2 {
+			qualityAgentAnswer(w)
+		} else {
+			qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+		}
 	})
 	p, err := newQualityPrimary(t.Context(), s, a, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.close()
-	args, _ := json.Marshal(map[string]any{"instructions": "Compare these related tests across modules.", "tests": []testquality.Identity{assigned[0].Identity, assigned[1].Identity}})
+	args, _ := json.Marshal(map[string]any{"mode": "assigned-tests", "instructions": "Compare these related tests across modules.", "tests": []testquality.Identity{assigned[0].Identity, assigned[1].Identity}})
 	if _, _, err := p.call(t.Context(), "delegate_review", args); err != nil {
 		t.Fatal(err)
 	}
-	result, citations, err := p.call(t.Context(), "read_review_agent", json.RawMessage(`{"agentID":"agent-1","wait":true}`))
+	result, citations, err := qualityChildReport(t, p)
 	if err != nil || !strings.Contains(string(result), `"status":"completed"`) || !strings.Contains(string(result), "Finished.") || len(citations) != 0 {
 		t.Fatalf("child report or citation isolation lost: %s %v", result, err)
 	}
@@ -306,8 +446,8 @@ func TestQualityAgentPrimaryDelegatesAcrossModulesWithoutSharingCitationAuthorit
 		t.Fatal(err)
 	}
 	summary, err := testquality.AggregateVersion(saved.Version, saved.Items)
-	if err != nil || summary.Counts.Scored != 2 || summary.Counts.Unreviewed != 1 || saved.Suite != nil {
-		t.Fatalf("child escaped assigned recording scope: %+v %+v %v", summary, saved.Suite, err)
+	if err != nil || summary.Counts.Scored != 3 || summary.Counts.Unreviewed != 0 || saved.Suite != nil {
+		t.Fatalf("inspected tests were restricted by delegation: %+v %+v %v", summary, saved.Suite, err)
 	}
 	group, _ := json.Marshal(qualityFixtureGroup(assigned[0].Declaration, "Primary's independent judgment.").args)
 	if err := p.record(p.items, true, "record_group", group, citations); err == nil {
@@ -332,15 +472,16 @@ func TestQualityAgentPrimaryCanRecoverFromChildFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	p, err := newQualityPrimary(t.Context(), s, a, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"instructions":"Inspect test behavior."}`)); err != nil {
+	if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(`{"mode":"research","instructions":"Inspect test behavior."}`)); err != nil {
 		t.Fatal(err)
 	}
-	result, citations, err := p.call(t.Context(), "read_review_agent", json.RawMessage(`{"agentID":"agent-1","wait":true}`))
+	result, citations, err := qualityChildReport(t, p)
 	if err != nil || !strings.Contains(string(result), "503") || len(citations) != 0 || p.ctx.Err() != nil {
 		t.Fatalf("child failure cancelled or hid evidence from primary: %s %v", result, err)
 	}
@@ -365,6 +506,191 @@ func TestQualityAgentPrimaryCanRecoverFromChildFailure(t *testing.T) {
 	}
 }
 
+func TestQualityAgentFreshRecordReplacesReuseAttribution(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Items[0].ReusedFrom = &testquality.ReusedAssessment{AssessmentID: "prior", Model: "old-model"}
+	item := a.Items[0]
+	raw, err := json.Marshal(qualityFixtureTest(item, 3, 2, "Freshly inspected and reassessed.").args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.recordQualityAgent(a, qualityAgentGroup{Tests: a.Items}, "record_test", raw, []testquality.Citation{item.Declaration}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.qualityStore.Load(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Items[0].ReusedFrom != nil {
+		t.Fatal("fresh judgment is falsely attributed to the prior model")
+	}
+}
+
+func TestQualityAgentDelegationRequiresExplicitRecordingIntent(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := newQualityPrimary(t.Context(), s, a, intelligence.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	for _, input := range []map[string]any{
+		{"instructions": "Assess and record these tests."},
+		{"mode": "assigned-tests", "instructions": "Assess and record these tests."},
+		{"mode": "research", "instructions": "Inspect a helper.", "tests": []testquality.Identity{a.Items[0].Identity}},
+		{"mode": "assigned-tests", "instructions": "Assess this test.", "tests": []testquality.Identity{a.Items[0].Identity, a.Items[0].Identity}},
+	} {
+		raw, _ := json.Marshal(input)
+		if _, err := p.delegate(raw); err == nil {
+			t.Errorf("ambiguous recording authority launched a child: %s", raw)
+		}
+	}
+}
+
+func TestQualityAgentChildRepairsPrematureCompletion(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		requests++
+		switch requests {
+		case 1:
+			qualityAgentAnswer(w)
+		case 2:
+			last := request.Messages[len(request.Messages)-1]
+			if last.Role != "user" || !strings.Contains(last.Content, "TestF") {
+				t.Errorf("child was not told which assigned record is missing: %+v", last)
+			}
+			qualityFixtureRespond(w, qualityFixtureRead(a.Items[0].Declaration),
+				qualityFixtureTest(a.Items[0], 3, 2, "Checks the result."))
+		default:
+			qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+		}
+	})
+	cfg.MaxSteps = 5
+	p, err := newQualityPrimary(t.Context(), s, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	raw, _ := json.Marshal(map[string]any{"mode": "assigned-tests", "instructions": "Assess this test.", "tests": []testquality.Identity{a.Items[0].Identity}})
+	if _, err := p.delegate(raw); err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := qualityChildReport(t, p)
+	saved, loadErr := s.qualityStore.Load(a.ID)
+	if err != nil || loadErr != nil || requests != 3 || saved.Items[0].Status != testquality.StatusScored ||
+		!strings.Contains(string(result), `"recorded":1`) || !strings.Contains(string(result), `"status":"completed"`) {
+		t.Fatalf("premature child completion was not repaired and verified: requests=%d result=%s error=%v load=%v", requests, result, err, loadErr)
+	}
+	events, err := s.qualityStore.AgentEvents(testquality.QueryInput{AssessmentID: a.ID, Limit: 100})
+	if err != nil || !strings.Contains(string(events), `"kind":"feedback"`) {
+		t.Fatalf("system intervention was not retained: %s %v", events, err)
+	}
+}
+
+func TestQualityAgentPrimaryObservesChildFailureWithoutPolling(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p *qualityPrimary
+	requests := 0
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+		if strings.HasPrefix(request.Messages[0].Content, qualityAgentPrompt) {
+			http.Error(w, "child unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		requests++
+		switch requests {
+		case 1:
+			qualityAgentAnswer(w, qualityAgentCall("delegate", "delegate_review", `{"mode":"research","instructions":"Inspect the helper."}`))
+		case 2:
+			p.mu.Lock()
+			done := p.children["agent-1"].done
+			p.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("child did not finish")
+			}
+			qualityAgentAnswer(w, qualityAgentCall("progress", "review_progress", `{"operation":"overview"}`))
+		case 3:
+			last := request.Messages[len(request.Messages)-1]
+			if last.Role != "user" || !strings.Contains(last.Content, "503") || !strings.Contains(last.Content, "agent-1") ||
+				!strings.Contains(last.Content, `"recorded":0`) {
+				t.Errorf("lead did not receive authoritative failure/progress feedback: %+v", last)
+			}
+			group := qualityFixtureGroup(a.Items[0].Declaration, "Project judgment.")
+			group.args.(map[string]any)["scope"] = "project"
+			qualityFixtureRespond(w, qualityFixtureRead(a.Items[0].Declaration),
+				qualityFixtureTest(a.Items[0], 3, 2, "Checks the result."), group)
+		default:
+			qualityAgentAnswer(w, qualityAgentCall("finish", "finish_review", `{}`))
+		}
+	})
+	cfg.MaxSteps = 6
+	p, err = newQualityPrimary(t.Context(), s, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.run(); err != nil || requests != 4 {
+		t.Fatalf("lead could not recover without child polling: requests=%d error=%v", requests, err)
+	}
+}
+
+func TestQualityAgentSupervisionStopsOnChildPersistenceFailure(t *testing.T) {
+	s := qualityFixture(t)
+	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, _ qualityAgentRequest) {
+		close(started)
+		<-release
+		qualityAgentAnswer(w)
+	})
+	p, err := newQualityPrimary(t.Context(), s, a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	if _, err := p.delegate(json.RawMessage(`{"mode":"research","instructions":"Inspect the helper."}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	eventPath := filepath.Join(s.qualityStore.Directory, a.ID, "agent-events.jsonl")
+	if err := os.Remove(eventPath); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(eventPath, 0700); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	p.mu.Lock()
+	done := p.children["agent-1"].done
+	p.mu.Unlock()
+	<-done
+	var persistenceErr *qualityPersistenceError
+	if _, err := p.options.State(); !errors.As(err, &persistenceErr) {
+		t.Fatalf("supervision treated lost persistence as a recoverable child report: %v", err)
+	}
+}
+
 func TestQualityAgentPrimaryRejectsUnownedDelegationScope(t *testing.T) {
 	s := qualityFixture(t)
 	a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
@@ -378,7 +704,7 @@ func TestQualityAgentPrimaryRejectsUnownedDelegationScope(t *testing.T) {
 	defer p.close()
 	for _, args := range []string{
 		`{"instructions":""}`,
-		`{"instructions":"Inspect","tests":[{"snapshotID":"foreign","module":"example","symbolID":"TestF"}]}`,
+		`{"mode":"assigned-tests","instructions":"Inspect","tests":[{"snapshotID":"foreign","module":"example","symbolID":"TestF"}]}`,
 	} {
 		if _, _, err := p.call(t.Context(), "delegate_review", json.RawMessage(args)); err == nil {
 			t.Fatalf("invalid delegation accepted: %s", args)

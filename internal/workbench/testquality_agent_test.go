@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -194,6 +196,213 @@ func TestQualityAgentRetainsMultipleFindingsForOneTest(t *testing.T) {
 	}
 	if len(saved.Items[0].Findings) != 2 {
 		t.Fatalf("later observation erased earlier finding: %+v", saved.Items[0].Findings)
+	}
+}
+
+func TestQualityAgentRecordsInspectedContextAroundTest(t *testing.T) {
+	for _, span := range [][2]int{{1, 4}, {1, 3}, {3, 4}, {3, 3}} {
+		t.Run(fmt.Sprintf("%d-%d", span[0], span[1]), func(t *testing.T) {
+			s := qualityFixture(t)
+			a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeSession()
+			item := a.Items[0]
+			read, _ := json.Marshal(map[string]any{"snapshotID": item.Identity.SnapshotID, "fileID": "test", "startLine": 1, "endLine": 4})
+			_, seen, err := options.Read(t.Context(), "review_source", read)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal(map[string]any{
+				"snapshotID": item.Identity.SnapshotID, "symbolID": item.Identity.SymbolID,
+				"fileID": "test", "startLine": span[0], "endLine": span[1],
+				"craftsmanship": 3, "assertionStrength": 2, "rationale": "The return value is checked.",
+			})
+			if err := s.recordQualityAgent(a, qualityAgentGroup{}, "record_test", args, seen); err != nil {
+				t.Fatalf("inspected context prevented recording: %v", err)
+			}
+			saved, err := s.qualityStore.Load(a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence := saved.Items[0].Ratings[0].Evidence
+			if saved.Items[0].Status != testquality.StatusScored || len(evidence) != 1 ||
+				evidence[0].StartLine != span[0] || evidence[0].EndLine != span[1] {
+				t.Fatalf("source-backed judgment or its cited context was lost: %+v", saved.Items[0])
+			}
+		})
+	}
+}
+
+func TestQualityAgentRecordingErrorsIdentifySourceProblem(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, symbol, snapshot string
+		start, end, readEnd          int
+		want                         []string
+	}{
+		{name: "unknown test", symbol: "unknown-test", start: 3, end: 3, readEnd: 7, want: []string{"unknown-test", "assessment"}},
+		{name: "wrong snapshot", snapshot: "other-snapshot", start: 3, end: 3, readEnd: 7, want: []string{"other-snapshot", "snapshot"}},
+		{name: "wrong file", file: "f", start: 2, end: 2, readEnd: 7, want: []string{"f", "test", "file"}},
+		{name: "unrelated lines", start: 1, end: 2, readEnd: 7, want: []string{"1-2", "3-7", "overlap"}},
+		{name: "unread test body", start: 3, end: 3, readEnd: 5, want: []string{"6-7", "test", "inspect"}},
+		{name: "unread citation", start: 6, end: 7, readEnd: 5, want: []string{"6-7", "test", "inspect"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := qualityFixture(t)
+			source := &s.review.Modules[0].Report.TestSources[0]
+			source.File.Source = "package example\nimport \"testing\"\nfunc TestF(t *testing.T) {\n if F()!=1 {\n  t.Fatal(\"wrong\")\n }\n}\n"
+			source.File.SHA256 = testquality.Digest([]byte(source.File.Source))
+			source.Declarations[0].Location.EndLine = 7
+			a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := a.Items[0]
+			seen := []testquality.Citation{
+				{SnapshotID: item.Identity.SnapshotID, FileID: "test", StartLine: 1, EndLine: tc.readEnd},
+				{SnapshotID: item.Identity.SnapshotID, FileID: "f", StartLine: 2, EndLine: 2},
+			}
+			file, symbol, snapshot := tc.file, tc.symbol, tc.snapshot
+			if file == "" {
+				file = "test"
+			}
+			if symbol == "" {
+				symbol = item.Identity.SymbolID
+			}
+			if snapshot == "" {
+				snapshot = item.Identity.SnapshotID
+			}
+			args, _ := json.Marshal(map[string]any{
+				"snapshotID": snapshot, "symbolID": symbol,
+				"fileID": file, "startLine": tc.start, "endLine": tc.end,
+				"craftsmanship": 3, "assertionStrength": 2, "rationale": "The return value is checked.",
+			})
+			group := qualityAgentGroup{SnapshotID: item.Identity.SnapshotID, Tests: a.Items}
+			primary := &qualityPrimary{server: s, assessment: a, items: a.Items}
+			for _, recordErr := range []error{
+				s.recordQualityAgent(a, group, "record_test", args, seen),
+				primary.record(a.Items, true, "record_test", args, seen),
+			} {
+				if recordErr == nil {
+					t.Fatal("invalid source-backed recording succeeded")
+				}
+				for _, detail := range tc.want {
+					if !strings.Contains(recordErr.Error(), detail) {
+						t.Errorf("error omitted corrective detail %q: %v", detail, recordErr)
+					}
+				}
+			}
+			saved, err := s.qualityStore.Load(a.ID)
+			if err != nil || saved.Items[0].Status != testquality.StatusUnreviewed {
+				t.Fatalf("rejected recording changed saved judgment: %+v %v", saved, err)
+			}
+		})
+	}
+}
+
+func TestQualityAgentRecordsAfterReadingSourceTextPages(t *testing.T) {
+	for _, tool := range []string{"review_source", "review_read_file", "review_batch", "changed_live"} {
+		for _, skipPage := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/skip=%t", tool, skipPage), func(t *testing.T) {
+				s := qualityFixture(t)
+				source := &s.review.Modules[0].Report.TestSources[0].File
+				source.Source = strings.ReplaceAll(source.Source, "wrong", "\u03c0\\twrong")
+				source.SHA256 = testquality.Digest([]byte(source.Source))
+				a, err := s.qualityStore.Create(t.Context(), s.review, "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				item := a.Items[0]
+				if tool == "changed_live" {
+					if err := os.WriteFile(filepath.Join(s.review.Root, "f_test.go"), []byte(strings.ReplaceAll(source.Source, "wrong", "changed")), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				options, closeSession, err := s.qualityEvidence(t.Context(), a, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeSession()
+				requests, offset, skipped := 0, 0, false
+				recorded := false
+				cfg := qualityAgentProvider(t, func(w http.ResponseWriter, _ *http.Request, request qualityAgentRequest) {
+					requests++
+					if requests > 1 {
+						last := request.Messages[len(request.Messages)-1].Content
+						if recorded {
+							if strings.Contains(last, `"recorded":true`) == (skipPage || tool == "changed_live") {
+								t.Errorf("paging provenance was not enforced: %s", last)
+							}
+							qualityAgentAnswer(w)
+							return
+						}
+						var result struct {
+							Data struct {
+								TextPage struct{ NextOffset *int }
+							}
+							Results []struct{ Result json.RawMessage }
+						}
+						if err := json.Unmarshal([]byte(last), &result); err != nil {
+							t.Error(err)
+							http.Error(w, "bad source response", http.StatusInternalServerError)
+							return
+						}
+						if tool == "review_batch" && len(result.Results) == 1 {
+							if err := json.Unmarshal(result.Results[0].Result, &result); err != nil {
+								t.Error(err)
+								http.Error(w, "bad batch response", http.StatusInternalServerError)
+								return
+							}
+						}
+						if result.Data.TextPage.NextOffset == nil {
+							recorded = true
+							qualityFixtureRespond(w, qualityFixtureTest(item, 3, 2, "Read the entire retained test across text pages."))
+							return
+						}
+						offset = *result.Data.TextPage.NextOffset
+						if skipPage && !skipped {
+							offset += 11
+							skipped = true
+						}
+					}
+					args := map[string]any{"snapshotID": item.Identity.SnapshotID, "startLine": 3, "endLine": 3, "textOffset": offset, "textLimit": 11}
+					name := tool
+					if tool == "review_read_file" || tool == "changed_live" {
+						name = "review_read_file"
+						args["path"] = "f_test.go"
+						if tool == "changed_live" {
+							args["source"] = "live"
+						}
+					} else {
+						args["fileID"] = "test"
+					}
+					if tool == "review_batch" {
+						args = map[string]any{"calls": []any{map[string]any{"tool": "review_source", "arguments": args}}}
+					}
+					raw, _ := json.Marshal(args)
+					qualityAgentAnswer(w, qualityAgentCall(fmt.Sprint(requests), name, string(raw)))
+				})
+				cfg.MaxSteps = 20
+				err = runQualityAgent(t.Context(), cfg, "Read and assess the selected test.", options, func(name string, args json.RawMessage, seen []testquality.Citation) error {
+					return s.recordQualityAgent(a, qualityAgentGroup{Tests: a.Items}, name, args, seen)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				saved, err := s.qualityStore.Load(a.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !recorded || (saved.Items[0].Status == testquality.StatusScored) == (skipPage || tool == "changed_live") {
+					t.Fatalf("text-page inspection did not determine saved status: %+v", saved.Items[0])
+				}
+			})
+		}
 	}
 }
 
