@@ -231,7 +231,7 @@ failed test. [Measurement details](docs/reference.md#coverage-interpretation).
 ### Application: start with an entry point
 
 Choose **Explore → Application**. Depending on the module, entries are supported
-HTTP registrations, CLI `main` functions, WIT component exports, or public
+HTTP registrations, AWS Lambda handlers and configured triggers, CLI `main` functions, WIT component exports, or public
 library functions/methods. **Startup & wiring** exposes supporting `main`/`init`
 context; **Entry declaration & evidence** shows where an entry came from.
 
@@ -254,7 +254,9 @@ These are **possible source continuations**, not a recording of one request.
 Dashed async/inspection links do not establish goroutine scheduling or callback
 execution. Hidden helpers remain accessible through expansion and function views.
 HTTP registration discovery does not prove a route is mounted in a running
-server. [Supported entry discovery](docs/reference.md#entry-point-discovery).
+server. Lambda trigger configuration is deployment evidence, not an observed
+invocation; dynamic or unlinked handlers remain unresolved.
+[Supported entry discovery](docs/reference.md#entry-point-discovery).
 
 ### System context and Components & exchanges
 

@@ -385,6 +385,14 @@ New analysis retains one entry inventory for the visual overview, MCP and chat:
   types, constants, variables and other package evidence remain browsable.
 - **HTTP services:** supported HTTP registrations remain entry points, with
   program `main` available for startup exploration.
+- **AWS Lambda:** calls from a retained `main` to supported
+  `github.com/aws/aws-lambda-go/lambda` registration functions identify
+  handlers, including supported local callback and interface forwarding.
+  Configured Serverless Framework and SAM events, CloudFormation Lambda event
+  source mappings and SNS subscriptions remain separate entries with their
+  configuration and, when supported, the linked Go handler. Lambda HTTP
+  triggers are not Go `net/http` registrations. Lambda `main` functions are
+  available under Startup & wiring.
 
 Go `init` declarations are separate supporting initialization, not external
 entries. Each entry opens the same progressively disclosed implementation flow.
@@ -411,9 +419,27 @@ includes versioned interfaces, direct/inline exports and plain world includes.
 Resource methods, include renaming, ambiguous/missing definitions and unsafe or
 out-of-bounds sources are reported as limitations, not invented implementations.
 
-Older retained snapshots are marked as legacy: **Analyze only** is needed to
-collect the new WIT/configuration and public-API evidence. Browsing a retained
-snapshot never reads current target files or silently invents missing entries.
+Lambda configuration discovery reads `serverless.yml` / `serverless.yaml` and
+`template.yml` / `template.yaml` under the selected module, excluding nested
+modules, excluded paths and symlinks. It inspects only literal `go build -o
+<output> <package>` commands in the module-root `Makefile` / `makefile` and
+GitLab CI YAML. It never runs those commands. A trigger links to a registration
+only when its literal handler path, build output, package directory and retained
+registration establish one unambiguous chain. This is possible deployment
+evidence, not proof that a build or deployment ran. Dynamic values, unsupported
+intrinsics, changed CI working directories, conflicting builds, missing source
+and unknown callback dispatch remain unresolved. CloudFormation event-source
+types are identified only from a literal ARN or a supported resource reference;
+other mappings remain generic. CloudFormation S3 artifacts and packaging or
+copy commands are not interpreted. Source traversal is bounded and does not
+recognize provider wrappers by name; unavailable dependency implementations
+cannot establish a handler link. Discovery retains at most 4,096 configured
+triggers and 4,096 build commands, and reports when either limit is reached.
+
+Snapshots without an entry inventory are marked as legacy. Older inventories
+without Lambda discovery also request **Analyze only** for Lambda evidence.
+Browsing a retained snapshot never reads current target files or silently
+invents missing entries.
 
 ### MCP exploration
 

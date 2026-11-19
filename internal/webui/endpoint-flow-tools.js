@@ -242,7 +242,8 @@
       link(rootStage.id,body.entry);
       const finish=make(endpoint.id,{keep:true,phase:'completion',kind:'Outcome',
         label:options.symbolID?'Operation returns':['startup','main','initialization'].includes(endpoint.entryKind)?'Startup operation completes':
-          endpoint.entryKind==='wasm'?'Wasm export returns':endpoint.entryKind==='library'?'Public API returns':'HTTP handler completes'});
+          endpoint.entryKind==='wasm'?'Wasm export returns':endpoint.entryKind==='library'?'Public API returns':
+          endpoint.entryKind==='lambda'?'Lambda handler returns':'HTTP handler completes'});
       link(body.exit,finish.id);
     }else rootStage.boundary=endpoint.reason||'Entry implementation unavailable. Declaration evidence remains inspectable.';
 

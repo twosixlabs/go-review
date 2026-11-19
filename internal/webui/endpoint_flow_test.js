@@ -115,13 +115,14 @@ test('Wasm input decoding remains visible when its record type belongs to a depe
   assert.equal(preparation.kind,'Prepare information');
 });
 
-for(const kind of ['wasm','cli','library'])test(kind+' entry inventory opens the same implementation flow and retains declaration evidence',async()=>{
+for(const kind of ['wasm','cli','library','lambda'])test(kind+' entry inventory opens the same implementation flow and retains declaration evidence',async()=>{
   const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),snapshot=fixture();
   snapshot.httpEndpoints=[];
   snapshot.supportingFiles=[{id:'binding',path:'wit_exports.go',source:'//go:wasmexport handle\nfunc wrapper() {}'}];
   snapshot.entryPoints={kind,initializers:[],limitations:[],sources:kind==='wasm'?[
     {id:'wit',path:'wit/world.wit',sha256:'witsha',text:'world app { export handle: func(); }'}]:[],
-    entries:[{id:'entry',kind:kind==='cli'?'main':kind,name:kind==='cli'?'main':kind==='wasm'?'app#handle':'PublicAPI',
+    entries:[{id:'entry',kind:kind==='cli'?'main':kind,name:kind==='cli'?'main':kind==='wasm'?'app#handle':kind==='lambda'?'Orders · SQS':'PublicAPI',
+      trigger:kind==='lambda'?'SQS':undefined,triggerDetails:kind==='lambda'?'Queue: orders':undefined,
       symbolID:'handler',resolution:'resolved',evidence:kind==='wasm'?[{sourceID:'wit',line:1,kind:'wit-export'},
         {kind:'wrapper-call',location:{fileID:'binding',line:1,endLine:2}}]:
         [{kind:'go-declaration',location:snapshot.symbols[0].location}]}]};
@@ -138,7 +139,7 @@ for(const kind of ['wasm','cli','library'])test(kind+' entry inventory opens the
     await new Promise(resolve=>setImmediate(resolve));
     const doc=dom.window.document;
     assert.match(doc.querySelector('#application-overview h1').textContent,
-      kind==='wasm'?/Wasm component/:kind==='library'?/Public library API/:/Program entry/);
+      kind==='wasm'?/Wasm component/:kind==='library'?/Public library API/:kind==='lambda'?/AWS Lambda/:/Program entry/);
     assert.equal(doc.querySelectorAll('.endpoint-row').length,1);
     doc.querySelector('.endpoint-row').click();
     assert.ok(doc.querySelector('#activity-overview [data-symbol-id="handler"]'),'entry did not reach implementation flow');
@@ -146,6 +147,7 @@ for(const kind of ['wasm','cli','library'])test(kind+' entry inventory opens the
     const evidence=[...doc.querySelectorAll('#detail button')].find(b=>b.textContent==='Entry declaration & evidence');
     assert.ok(evidence,'entry evidence must be reachable in the visible inspector, not only the hidden explorer');
     evidence.click();
+    if(kind==='lambda')assert.match(doc.querySelector('#detail').textContent,/Queue: orders/);
     if(kind==='wasm') {
       assert.match(doc.querySelector('#detail').textContent,/wit-export/);
       [...doc.querySelectorAll('#detail button')].find(b=>b.textContent==='Inspect binding source').click();

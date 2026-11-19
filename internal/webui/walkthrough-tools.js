@@ -9,7 +9,8 @@
     const expanded=new Set(state.expanded||[]),nodes=[],edges=[],limitations=new Set();
     const rootID=endpoint.id;
     nodes.push({id:rootID,kind:['startup','main','initialization'].includes(endpoint.entryKind)?'Startup entry':
-      endpoint.entryKind==='wasm'?'Wasm export':endpoint.entryKind==='library'?'Public API':'HTTP endpoint',label:endpoint.patternKnown?endpoint.pattern:endpoint.patternExpression,
+      endpoint.entryKind==='wasm'?'Wasm export':endpoint.entryKind==='library'?'Public API':
+      endpoint.entryKind==='lambda'?(endpoint.trigger?'Lambda trigger':'Lambda handler'):'HTTP endpoint',label:endpoint.patternKnown?endpoint.pattern:endpoint.patternExpression,
       endpoint,comments:[],calls:[],reachable:true});
     function instantiate(symbolID,prefix,depth) {
       const owner=symbols.get(symbolID),original=flows.get(symbolID);

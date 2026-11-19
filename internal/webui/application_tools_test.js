@@ -58,3 +58,30 @@ test('public library entry flows are not labeled HTTP and older snapshots reques
   assert.equal(application.entryInventory(r)[0].handlerID,'main');
   assert.equal(query.query(r,'overview',{}).entryDiscoveryStatus,'legacy');
 });
+
+test('Lambda trigger entries retain their type in browser and MCP flows',()=>{
+  const r=snapshot('lambda');
+  r.entryPoints.entries=[{id:'lambda:sqs',kind:'lambda',name:'Orders · SQS',trigger:'SQS',triggerDetails:'Queue: orders',
+    symbolID:'handler',boundarySymbolID:'main',resolution:'resolved',evidence:[{sourceID:'wit',line:1,kind:'lambda-trigger',detail:'SQS'}]}];
+  const row=application.entryInventory(r)[0];
+  assert.equal(row.group,'AWS Lambda');
+  assert.equal(row.method,'SQS');
+  const overview=query.query(r,'overview',{section:'entries'}).items[0];
+  assert.equal(overview.trigger,'SQS');
+  assert.equal(overview.triggerDetails,'Queue: orders');
+  assert.equal(overview.boundarySymbolID,'main');
+  const flow=query.query(r,'flow',{entryID:'lambda:sqs'});
+  assert.equal(flow.entry.trigger,'SQS');
+  assert.equal(flow.entry.boundarySymbolID,'main');
+  assert.ok(JSON.stringify(flow).includes('Lambda handler returns'));
+  assert.ok(!JSON.stringify(flow).includes('HTTP handler completes'));
+  const walkthrough=require('./walkthrough-tools.js').endpointWalkthrough(r,row);
+  assert.equal(walkthrough.nodes[0].kind,'Lambda trigger');
+});
+
+test('older inventories disclose that Lambda discovery requires reanalysis',()=>{
+  const r=snapshot('cli');
+  assert.match(query.query(r,'overview',{}).entryDiscoveryNote,/Lambda/);
+  r.entryPoints.lambdaDiscoveryVersion=1;
+  assert.equal(query.query(r,'overview',{}).entryDiscoveryNote,null);
+});

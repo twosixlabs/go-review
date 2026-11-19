@@ -57,7 +57,7 @@ function renderApplication() {
   button('Browse packages',()=>go({kind:'packages'}),$('list'));
   const panel=$('application-overview');
   el('h1',mode.section==='startup'?'Supporting initialization':mode.group||
-    ({wasm:'Wasm component exports',cli:'Program entry points',library:'Public library API',service:'Service entry points'}[report.entryPoints?.kind]||'Entry points'),panel);
+    ({wasm:'Wasm component exports',lambda:'AWS Lambda entry points',cli:'Program entry points',library:'Public library API',service:'Service entry points'}[report.entryPoints?.kind]||'Entry points'),panel);
   const purpose=el('section',undefined,panel,'entry-purpose');
   el('strong',report.module,purpose);
   const moduleDoc=report.packages.find(p=>p.path===report.module)?.doc;
@@ -97,6 +97,7 @@ function renderApplication() {
   }
   const limits=el('details',undefined,panel);el('summary','Detection scope',limits);
   if(!report.entryPoints)el('p','Older snapshot: analyze again to collect WIT, wasmCloud configuration and public library API entries.',limits,'error');
+  else if(!report.entryPoints.lambdaDiscoveryVersion)el('p','Older snapshot: analyze again to collect Lambda entries and configuration evidence.',limits,'error');
   for(const note of report.entryPoints?.limitations||[])el('p',note,limits);
   el('p',httpInventoryNote,limits);
   el('p','These are registration sites, not a live-server inventory. Duplicate patterns and dynamic patterns remain separate. ANY means the pattern has no method restriction; GET patterns also match HEAD in Go ServeMux.',limits);
@@ -109,6 +110,7 @@ function endpointRegistrationDetail(endpoint) {
   detail(endpointTitle(endpoint),endpoint.entryKind==='http'?'HTTP registration':'Entry-point declaration');
   if(endpoint.handler)el('p',endpoint.handler,$('detail'));
   if(endpoint.reason)el('p',endpoint.reason,$('detail'),'data-boundary-note');
+  if(endpoint.triggerDetails)el('pre',endpoint.triggerDetails,$('detail'));
   if(!endpoint.patternKnown)el('p','The route pattern is computed at runtime; its value is unknown.',$('detail'),'data-boundary-note');
   const declaration=sym(endpoint.registrationID);
   if(declaration)button('Registration in '+logicalTitle(declaration),()=>go({kind:'logical',id:declaration.id}),$('detail'));

@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"fmt"
 	"go/types"
 	"sort"
 	"strings"
@@ -10,11 +11,12 @@ import (
 // EntryPointInventory separates externally callable operations from supporting
 // initialization. A nil inventory means an older snapshot, not an empty API.
 type EntryPointInventory struct {
-	Kind         string       `json:"kind"`
-	Entries      []EntryPoint `json:"entries"`
-	Initializers []string     `json:"initializers"`
-	Sources      []Document   `json:"sources"`
-	Limitations  []string     `json:"limitations"`
+	Kind                   string       `json:"kind"`
+	Entries                []EntryPoint `json:"entries"`
+	Initializers           []string     `json:"initializers"`
+	Sources                []Document   `json:"sources"`
+	Limitations            []string     `json:"limitations"`
+	LambdaDiscoveryVersion int          `json:"lambdaDiscoveryVersion,omitempty"`
 }
 
 type EntryPoint struct {
@@ -28,12 +30,15 @@ type EntryPoint struct {
 	World            string               `json:"world,omitempty"`
 	Interface        string               `json:"interface,omitempty"`
 	Function         string               `json:"function,omitempty"`
+	Trigger          string               `json:"trigger,omitempty"`
+	TriggerDetails   string               `json:"triggerDetails,omitempty"`
 	Evidence         []EntryPointEvidence `json:"evidence"`
 }
 
 type EntryPointEvidence struct {
 	SourceID string    `json:"sourceID,omitempty"`
 	Line     int       `json:"line,omitempty"`
+	Column   int       `json:"column,omitempty"`
 	EndLine  int       `json:"endLine,omitempty"`
 	Kind     string    `json:"kind"`
 	Detail   string    `json:"detail,omitempty"`
@@ -108,6 +113,27 @@ func (a *analyzer) collectEntryPoints(ctx context.Context) error {
 				"Public API entries are exported callable declarations on accessible packages and exported receiver types; types, constants and variables remain available in package evidence. Interface dispatch and promoted method reachability are not inferred.")
 		}
 	}
+	r.EntryPoints = inventory
+	lambda, lambdaMains := lambdaEntries(r)
+	lambda, err = lambdaConfigEntries(ctx, r, lambda, inventory)
+	if err != nil {
+		return err
+	}
+	inventory.LambdaDiscoveryVersion = 1
+	if len(lambda) > 0 {
+		if inventory.Kind == "cli" || inventory.Kind == "library" && len(inventory.Entries) == 0 {
+			inventory.Kind = "lambda"
+		}
+		entries := inventory.Entries[:0]
+		for _, entry := range inventory.Entries {
+			if lambdaMains[entry.SymbolID] && entry.Kind == "main" {
+				inventory.Initializers = append(inventory.Initializers, entry.SymbolID)
+			} else {
+				entries = append(entries, entry)
+			}
+		}
+		inventory.Entries = append(entries, lambda...)
+	}
 	for _, e := range r.HTTPEndpoints {
 		resolution := "resolved"
 		if e.HandlerID == "" {
@@ -130,6 +156,19 @@ func (a *analyzer) collectEntryPoints(ctx context.Context) error {
 		return inventory.Entries[i].ID < inventory.Entries[j].ID
 	})
 	sort.Strings(inventory.Initializers)
+	sources := make([]Document, 0, len(inventory.Sources))
+	seenSources := map[string]string{}
+	for _, source := range inventory.Sources {
+		if previous, ok := seenSources[source.ID]; ok {
+			if previous != source.SHA256 {
+				return fmt.Errorf("entry source %q changed during discovery", source.Path)
+			}
+			continue
+		}
+		seenSources[source.ID] = source.SHA256
+		sources = append(sources, source)
+	}
+	inventory.Sources = sources
 	r.EntryPoints = inventory
 	for _, source := range inventory.Sources {
 		r.Inputs = append(r.Inputs, Input{Path: source.Path, SHA256: source.SHA256})

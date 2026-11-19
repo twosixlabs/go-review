@@ -264,8 +264,9 @@
         id:e.id,handlerID:e.handlerID,name:e.title,location:e.location,metrics:metrics(report,[e.handlerID])}));
       const sections={
         entries:()=>entries.map(e=>({id:e.id,method:e.method,pattern:e.pattern,handlerID:e.handlerID,
-          kind:e.entryKind,group:e.group,location:e.location,resolution:e.resolution,reason:e.reason,
-          world:e.world,interface:e.interface,function:e.function,evidenceCount:e.evidence?.length||0,
+          kind:e.entryKind,group:e.group,location:e.location,resolution:e.resolution,reason:e.reason,boundarySymbolID:e.boundarySymbolID,
+          world:e.world,interface:e.interface,function:e.function,trigger:e.trigger,triggerDetails:e.triggerDetails,
+          evidenceCount:e.evidence?.length||0,
           metrics:metrics(report,e.handlerID?[e.handlerID]:[])})),
         initialization:()=>initialization,
         entrySources:()=>(report.entryPoints?.sources||[]).map(({id,path,sha256})=>({id,path,sha256})),
@@ -283,7 +284,8 @@
       const starts=collection(startup,args);
       return {module:report.module,root:report.root,revision:report.revision,
         projectKind:report.entryPoints?.kind||'unclassified',entryDiscoveryStatus:report.entryPoints?'collected':'legacy',
-        entryDiscoveryNote:report.entryPoints?null:'This older snapshot lacks WIT/configuration and public API entry evidence. Analyze again for complete entry discovery.',
+        entryDiscoveryNote:!report.entryPoints?'This older snapshot lacks WIT/configuration and public API entry evidence. Analyze again for complete entry discovery.':
+          !report.entryPoints.lambdaDiscoveryVersion?'This older snapshot lacks Lambda entry discovery. Analyze again to collect it.':null,
         initializationCount:initialization.length,entrySourceCount:report.entryPoints?.sources?.length||0,
         entryLimitations:page(report.entryPoints?.limitations||[],args),
         purposeAvailable:!!(report.packages||[]).find(p=>p.path===report.module)?.doc,
@@ -310,7 +312,8 @@
         const ns=collection(nodes,args),es=collection(edges,args);
         return {context:{entryID:args.entryID,focusSymbolID:args.focusSymbolID,
           focusPath:args.focusPath||[],expandedIDs:args.expandedIDs||[]},
-          entry:{id:selected.id,handlerID:selected.handlerID,pattern:selected.pattern,entryKind:selected.entryKind},
+          entry:{id:selected.id,handlerID:selected.handlerID,pattern:selected.pattern,entryKind:selected.entryKind,
+            boundarySymbolID:selected.boundarySymbolID,trigger:selected.trigger,triggerDetails:selected.triggerDetails},
           nodes:ns.values,nodePage:ns.paging,edges:es.values,edgePage:es.paging,
           parent:parent?{nodeCount:parent.nodes.length,edgeCount:parent.edges.length}:null,
           limitations:page(p.limitations||[],args),sections:Object.keys(sections)};

@@ -28,9 +28,11 @@
       resolution:entry.resolution,evidence:entry.evidence};
     return {...entry,handlerID:entry.symbolID,pattern:entry.name,patternKnown:true,
       entryKind:entry.kind,handler:symbol?.qualified||symbol?.name,location:symbol?.location,
-      title:entry.name,method:entry.kind==='wasm'?'WIT':entry.kind==='library'?'API':'Go',
+      title:entry.name,method:entry.kind==='wasm'?'WIT':entry.kind==='library'?'API':
+        entry.kind==='lambda'?entry.trigger||'Lambda':'Go',
       path:entry.name,host:'',group:entry.kind==='wasm'?entry.world||'Wasm exports':
-        entry.kind==='library'?symbol?.package||'Public API':entry.kind==='initialization'?'Initialization':'Program entry'};
+        entry.kind==='library'?symbol?.package||'Public API':entry.kind==='lambda'?'AWS Lambda':
+        entry.kind==='initialization'?'Initialization':'Program entry'};
   }
   function legacyEntries(report) {
     const wasm=(report.files||[]).some(f=>/\/\/(?:go:wasmexport|export)\s/.test(f.source||''));
@@ -44,7 +46,7 @@
     const rows=report.entryPoints?(report.entryPoints.entries||[]).map(e=>adaptedEntry(e,report)):legacyEntries(report);
     const query=(filter.query||'').trim().toLowerCase();
     return rows.filter(r=>(!filter.group||r.group===filter.group)&&
-      [r.title,r.handler,r.group,r.reason,r.world,r.interface,r.function].join(' ').toLowerCase().includes(query))
+      [r.title,r.handler,r.group,r.reason,r.world,r.interface,r.function,r.trigger,r.triggerDetails].join(' ').toLowerCase().includes(query))
       .sort((a,b)=>a.group.localeCompare(b.group)||a.title.localeCompare(b.title)||a.id.localeCompare(b.id));
   }
   function initializationInventory(report) {
